@@ -1,0 +1,36 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Supplier</h3>
+    <div class="name">{{ doc.supplier.name }}</div>
+    <div style="white-space:pre-line">{{ doc.supplier.address }}</div>
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>GRN no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Receipt date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Purchase order</td><td>{{ doc.purchase_order.number }}</td></tr>
+      <tr><td>Warehouse</td><td>{{ doc.warehouse.name }}</td></tr>
+      {% if doc.supplier_delivery_note %}<tr><td>Supplier DN</td><td>{{ doc.supplier_delivery_note }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+<table class="items">
+  <thead><tr><th style="width:4%">#</th><th>Item</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Accepted</th><th class="num">Rejected</th><th>Batch / expiry / serials</th><th class="num">Value</th></tr></thead>
+  <tbody>
+  {% for line in doc.lines.all %}
+    <tr><td>{{ forloop.counter }}</td><td><strong>{{ line.product.name }}</strong><div class="small">{{ line.product.sku }}{% if line.rejection_reason %} · Rejected: {{ line.rejection_reason }}{% endif %}</div></td>
+      <td class="num">{{ line.order_line.quantity|qty }}</td><td class="num">{{ line.received_quantity|qty }}</td>
+      <td class="num"><strong>{{ line.accepted_quantity|qty }}</strong></td><td class="num">{{ line.rejected_quantity|qty }}</td>
+      <td class="small">{{ line.batch_number }}{% if line.expiry_date %} · exp {% bizdate line.expiry_date %}{% endif %}{% if line.serial_numbers %} · {{ line.serial_numbers|join:", " }}{% endif %}</td>
+      <td class="num">{% amount line.value %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<table class="totals" style="margin-left:auto; margin-top:8pt"><tr class="grand"><td>Value received (excl. VAT)</td><td class="num">{% amount doc.total_value %}</td></tr></table>
+{% if doc.notes %}<div class="terms"><strong>Notes</strong>
+{{ doc.notes }}</div>{% endif %}
+{% with sig1="Received by" sig1_name=doc.received_by.full_name sig2="Quality check" sig3="Store in-charge" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

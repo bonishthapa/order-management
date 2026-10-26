@@ -1,0 +1,40 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Received from</h3>
+    <div class="name">{{ doc.customer.name }}</div>
+    <div style="white-space:pre-line">{{ doc.customer.billing_address }}</div>
+    {% if doc.customer.tax_id %}<div>PAN/VAT: {{ doc.customer.tax_id }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Receipt no.</td><td><strong>{{ doc.number }}</strong></td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Method</td><td>{{ doc.payment_method.name }}</td></tr>
+      <tr><td>Deposited to</td><td>{{ doc.deposit_account.name }}</td></tr>
+      {% if doc.reference %}<tr><td>Reference</td><td>{{ doc.reference }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+<div class="box" style="margin-top:10pt; font-size:10pt">
+  Amount received: <strong>{{ organization.currency_symbol }} {% amount doc.amount %}</strong>
+  <div class="words">{{ doc.amount|words }}</div>
+</div>
+<table class="items">
+  <thead><tr><th>Invoice</th><th>Invoice date</th><th class="num">Invoice total</th><th class="num">Applied</th></tr></thead>
+  <tbody>
+  {% for a in doc.allocations.all %}{% if a.is_active %}
+    <tr><td>{{ a.invoice.number }}</td><td>{% bizdate a.invoice.invoice_date %}</td><td class="num">{% amount a.invoice.grand_total %}</td><td class="num">{% amount a.amount %}</td></tr>
+  {% endif %}{% empty %}<tr><td colspan="4" class="small">Not applied to any invoice (held as customer advance).</td></tr>{% endfor %}
+  </tbody>
+</table>
+<table class="totals" style="margin-left:auto; margin-top:6pt">
+  <tr><td>Applied to invoices</td><td class="num">{% amount doc.allocated_amount %}</td></tr>
+  {% if doc.refunded_amount %}<tr><td>Refunded</td><td class="num">{% amount doc.refunded_amount %}</td></tr>{% endif %}
+  <tr class="grand"><td>Unapplied (advance)</td><td class="num">{% amount doc.unapplied_amount %}</td></tr>
+</table>
+{% if doc.notes %}<div class="terms">{{ doc.notes }}</div>{% endif %}
+{% with sig1="Received by" sig1_name=doc.received_by.full_name sig2="Customer" sig3="Authorised signature" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

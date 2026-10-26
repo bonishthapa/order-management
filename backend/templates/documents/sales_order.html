@@ -1,0 +1,32 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Customer</h3>
+    <div class="name">{{ doc.customer.name }}</div>
+    <div style="white-space:pre-line">{{ doc.customer.billing_address }}</div>
+    {% if doc.customer.tax_id %}<div>PAN/VAT: {{ doc.customer.tax_id }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <h3>Ship to</h3>
+    <div style="white-space:pre-line">{{ doc.shipping_address|default:doc.customer.shipping_address }}</div>
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Order no.</td><td><strong>{{ doc.number }}</strong></td></tr>
+      <tr><td>Order date</td><td>{% bizdate doc.order_date %}</td></tr>
+      {% if doc.expected_delivery_date %}<tr><td>Expected</td><td>{% bizdate doc.expected_delivery_date %}</td></tr>{% endif %}
+      <tr><td>Warehouse</td><td>{{ doc.warehouse.name }}</td></tr>
+      <tr><td>Payment terms</td><td>{{ doc.payment_terms_days }} days</td></tr>
+      <tr><td>Status</td><td>{{ doc.get_status_display }}</td></tr>
+    </table>
+  </div>
+</div>
+{% with lines=doc.lines.all %}{% include "documents/_lines.html" %}{% endwith %}
+{% include "documents/_totals.html" %}
+{% if doc.notes %}<div class="terms"><strong>Notes</strong>
+{{ doc.notes }}</div>{% endif %}
+{% if doc.terms %}<div class="terms"><strong>Terms</strong>
+{{ doc.terms }}</div>{% endif %}
+{% with sig1="Prepared by" sig1_name=doc.created_by.full_name sig2="Approved by" sig2_name=doc.approved_by.full_name sig3="Customer acceptance" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

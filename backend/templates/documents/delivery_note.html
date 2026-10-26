@@ -1,0 +1,35 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Deliver to</h3>
+    <div class="name">{{ doc.customer.name }}</div>
+    <div style="white-space:pre-line">{{ doc.shipping_address|default:doc.customer.shipping_address }}</div>
+    {% if doc.customer.phone %}<div>Phone: {{ doc.customer.phone }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Delivery no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Sales order</td><td>{{ doc.sales_order.number }}</td></tr>
+      <tr><td>From warehouse</td><td>{{ doc.warehouse.name }}</td></tr>
+      {% if doc.vehicle_number %}<tr><td>Vehicle</td><td>{{ doc.vehicle_number }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+<table class="items">
+  <thead><tr><th style="width:5%">#</th><th>Item</th><th class="num">Ordered</th><th class="num">Delivered now</th><th>Batch / serials</th></tr></thead>
+  <tbody>
+  {% for line in doc.lines.all %}
+    <tr><td>{{ forloop.counter }}</td><td><strong>{{ line.product.name }}</strong><div class="small">{{ line.product.sku }}</div></td>
+      <td class="num">{{ line.order_line.quantity|qty }} {{ line.product.unit.code }}</td>
+      <td class="num"><strong>{{ line.quantity|qty }}</strong> {{ line.product.unit.code }}</td>
+      <td class="small">{{ line.batch_number }}{% if line.serial_numbers %} {{ line.serial_numbers|join:", " }}{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if doc.notes %}<div class="terms"><strong>Notes</strong>
+{{ doc.notes }}</div>{% endif %}
+<div class="terms">Goods received in good condition. Please check quantities on receipt; claims must be raised within 7 days.</div>
+{% with sig1="Dispatched by" sig1_name=doc.posted_by.full_name sig2="Driver" sig3="Received by (name, signature, date)" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

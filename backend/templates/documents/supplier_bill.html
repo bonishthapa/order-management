@@ -1,0 +1,26 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Supplier</h3>
+    <div class="name">{{ doc.supplier.name }}</div>
+    <div style="white-space:pre-line">{{ doc.supplier.address }}</div>
+    {% if doc.supplier.tax_id %}<div>PAN/VAT: {{ doc.supplier.tax_id }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Bill no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Supplier invoice</td><td>{{ doc.supplier_invoice_number }}</td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Bill date</td><td>{% bizdate doc.bill_date %}</td></tr>
+      <tr><td>Due date</td><td>{% bizdate doc.due_date %}</td></tr>
+      {% if doc.purchase_order %}<tr><td>Purchase order</td><td>{{ doc.purchase_order.number }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+{% with lines=doc.lines.all %}{% include "documents/_lines.html" %}{% endwith %}
+{% with show_balance=True %}{% include "documents/_totals.html" %}{% endwith %}
+{% if doc.notes %}<div class="terms"><strong>Notes</strong>
+{{ doc.notes }}</div>{% endif %}
+{% with sig1="Entered by" sig1_name=doc.posted_by.full_name sig2="Checked by" sig3="Approved by" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

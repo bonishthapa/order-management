@@ -1,0 +1,76 @@
+{% load erp %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }} {{ doc.number }}</title>
+<style>
+  @page {
+    size: A4 {% if landscape %}landscape{% endif %};
+    margin: 14mm 13mm 16mm 13mm;
+    @bottom-left { content: element(pagefooter); }
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 7.5pt; color: #6b7280; }
+  }
+  * { box-sizing: border-box; }
+  .page-footer { position: running(pagefooter); font-size: 7.5pt; color: #6b7280; }
+  body { font-family: "Inter", "Noto Sans", "DejaVu Sans", Arial, sans-serif; font-size: 8.8pt; color: #111827; line-height: 1.38; margin: 0; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1.4pt solid #1f3a5f; padding-bottom: 8pt; }
+  .company { display: flex; gap: 10pt; align-items: flex-start; max-width: 62%; }
+  .company img { max-height: 46pt; max-width: 110pt; }
+  .company h1 { font-size: 13.5pt; margin: 0 0 2pt; color: #1f3a5f; letter-spacing: 0.1pt; }
+  .company .muted { color: #4b5563; font-size: 8pt; white-space: pre-line; }
+  .doc-title { text-align: right; }
+  .doc-title h2 { margin: 0; font-size: 14pt; text-transform: uppercase; letter-spacing: 1pt; color: #1f3a5f; }
+  .copy { display: inline-block; margin-top: 4pt; border: 0.8pt solid #9ca3af; padding: 1pt 6pt; font-size: 7.5pt; letter-spacing: 0.6pt; color: #374151; }
+  .copy.void { border-color: #b91c1c; color: #b91c1c; }
+  .meta-grid { display: flex; gap: 12pt; margin-top: 10pt; }
+  .box { flex: 1; border: 0.6pt solid #d1d5db; padding: 6pt 8pt; }
+  .box h3 { margin: 0 0 3pt; font-size: 7.3pt; text-transform: uppercase; letter-spacing: 0.6pt; color: #6b7280; font-weight: 600; }
+  .box .name { font-weight: 600; font-size: 9.5pt; }
+  .kv { width: 100%; border-collapse: collapse; }
+  .kv td { padding: 1pt 0; vertical-align: top; }
+  .kv td:first-child { color: #6b7280; width: 40%; }
+  table.items { width: 100%; border-collapse: collapse; margin-top: 10pt; }
+  table.items th { background: #f3f4f6; border-top: 0.8pt solid #9ca3af; border-bottom: 0.8pt solid #9ca3af; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.3pt; color: #374151; padding: 4pt 5pt; text-align: left; font-weight: 600; }
+  table.items td { padding: 4pt 5pt; border-bottom: 0.5pt solid #e5e7eb; vertical-align: top; }
+  table.items tr { page-break-inside: avoid; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .center { text-align: center; }
+  .small { font-size: 7.6pt; color: #6b7280; }
+  .summary { display: flex; justify-content: space-between; gap: 14pt; margin-top: 10pt; page-break-inside: avoid; }
+  .summary .left { flex: 1; }
+  table.totals { width: 44%; border-collapse: collapse; }
+  table.totals td { padding: 2.5pt 5pt; }
+  table.totals tr.grand td { border-top: 1pt solid #111827; border-bottom: 2pt double #111827; font-weight: 700; font-size: 10pt; }
+  .words { font-style: italic; margin-top: 4pt; }
+  .terms { margin-top: 10pt; font-size: 7.8pt; color: #374151; white-space: pre-line; border-top: 0.5pt solid #e5e7eb; padding-top: 6pt; }
+  .signatures { display: flex; justify-content: space-between; margin-top: 34pt; page-break-inside: avoid; }
+  .sig { width: 30%; text-align: center; border-top: 0.7pt solid #6b7280; padding-top: 3pt; font-size: 8pt; color: #374151; }
+  .sig .who { font-size: 7.5pt; color: #6b7280; }
+  .generated { margin-top: 10pt; font-size: 7pt; color: #9ca3af; }
+  .watermark { position: fixed; top: 40%; left: 15%; font-size: 64pt; color: rgba(185, 28, 28, 0.08); transform: rotate(-24deg); font-weight: 700; letter-spacing: 6pt; }
+  {% block extra_style %}{% endblock %}
+</style>
+</head>
+<body>
+<div class="page-footer">{{ organization.document_footer|default:organization.name }}</div>
+{% if doc.status == "CANCELLED" or doc.status == "REVERSED" %}<div class="watermark">{{ doc.get_status_display|upper }}</div>{% endif %}
+{% if copy_label == "DRAFT" %}<div class="watermark">DRAFT</div>{% endif %}
+<div class="header">
+  <div class="company">
+    {% if logo %}<img src="{{ logo }}" alt="">{% endif %}
+    <div>
+      <h1>{{ organization.legal_name|default:organization.name }}</h1>
+      <div class="muted">{{ organization.address }}{% if organization.city %}, {{ organization.city }}{% endif %}
+{% if organization.phone %}Phone {{ organization.phone }}{% endif %}{% if organization.email %} · {{ organization.email }}{% endif %}
+{% if organization.tax_id %}PAN/VAT {{ organization.tax_id }}{% endif %}</div>
+    </div>
+  </div>
+  <div class="doc-title">
+    <h2>{{ title }}</h2>
+    {% if copy_label %}<div class="copy {% if copy_label == 'CANCELLED' or copy_label == 'REVERSED' %}void{% endif %}">{{ copy_label }}</div>{% endif %}
+  </div>
+</div>
+{% block content %}{% endblock %}
+<div class="generated">Generated {{ generated_at|date:"Y-m-d H:i" }}{% if generated_by %} by {{ generated_by }}{% endif %} · All amounts in {{ organization.currency }}</div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Payee</h3>
+    <div class="name">{{ doc.payee }}</div>
+    {% if doc.supplier %}<div>{{ doc.supplier.name }}{% if doc.supplier.tax_id %} · PAN/VAT {{ doc.supplier.tax_id }}{% endif %}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Voucher no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Category</td><td>{{ doc.category.name }}</td></tr>
+      <tr><td>Paid from</td><td>{{ doc.paid_from_account.name }} ({{ doc.payment_method.name }})</td></tr>
+      {% if doc.reference %}<tr><td>Reference</td><td>{{ doc.reference }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+<table class="items"><thead><tr><th>Description</th><th class="num">Amount</th></tr></thead>
+<tbody><tr><td style="white-space:pre-line">{{ doc.description|default:doc.category.name }}</td><td class="num">{% amount doc.amount %}</td></tr></tbody></table>
+<table class="totals" style="margin-left:auto; margin-top:6pt">
+  <tr><td>Amount</td><td class="num">{% amount doc.amount %}</td></tr>
+  <tr><td>VAT ({{ doc.tax_percent|floatformat:"-2" }}%)</td><td class="num">{% amount doc.tax_amount %}</td></tr>
+  <tr class="grand"><td>Total paid</td><td class="num">{{ organization.currency_symbol }} {% amount doc.total %}</td></tr>
+</table>
+<div class="words">{{ doc.total|words }}</div>
+{% with sig1="Prepared by" sig1_name=doc.created_by.full_name sig2="Approved by" sig2_name=doc.approved_by.full_name sig3="Received by" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

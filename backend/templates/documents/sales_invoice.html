@@ -1,0 +1,29 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Bill to</h3>
+    <div class="name">{{ doc.customer_name|default:doc.customer.name }}</div>
+    <div style="white-space:pre-line">{{ doc.customer_address|default:doc.customer.billing_address }}</div>
+    {% if doc.customer_tax_id or doc.customer.tax_id %}<div>PAN/VAT: {{ doc.customer_tax_id|default:doc.customer.tax_id }}</div>{% endif %}
+    {% if doc.customer.phone %}<div>Phone: {{ doc.customer.phone }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Invoice no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Invoice date</td><td>{% bizdate doc.invoice_date %}</td></tr>
+      <tr><td>Due date</td><td>{% bizdate doc.due_date %}</td></tr>
+      {% if doc.sales_order %}<tr><td>Sales order</td><td>{{ doc.sales_order.number }}</td></tr>{% endif %}
+      {% if doc.customer_reference %}<tr><td>Customer ref.</td><td>{{ doc.customer_reference }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+{% with lines=doc.lines.all %}{% include "documents/_lines.html" %}{% endwith %}
+{% with show_balance=True %}{% include "documents/_totals.html" %}{% endwith %}
+{% if doc.notes %}<div class="terms"><strong>Notes</strong>
+{{ doc.notes }}</div>{% endif %}
+{% if doc.terms %}<div class="terms"><strong>Terms and conditions</strong>
+{{ doc.terms }}</div>{% endif %}
+{% with sig1="Prepared by" sig1_name=doc.posted_by.full_name sig2="Received by (customer)" sig3="For "|add:organization.name %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

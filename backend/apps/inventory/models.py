@@ -1,0 +1,343 @@
+"""Inventory data model.
+
+Source of truth: ``StockLedgerEntry`` rows, written only by ``apps.inventory.services`` when a
+document is posted. ``StockBalance`` (on hand, reserved, value) and ``CostLayer`` (FIFO layers)
+are maintained in the same database transaction, under row locks, as a controlled optimisation;
+``services.rebuild_balances`` can recompute them from the ledger and the test-suite checks they agree.
+Posted ledger rows are never edited; corrections are new reversing or adjusting movements.
+"""
+from django.conf import settings
+from django.db import models
+from django.db.models import Q
+
+from apps.core.models import OrganizationOwned, TimeStampedModel
+from apps.core.money import MONEY_DIGITS, QTY_DIGITS, RATE_DIGITS
+
+
+class Warehouse(TimeStampedModel):
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="warehouses")
+    branch = models.ForeignKey("organizations.Branch", on_delete=models.PROTECT, null=True, blank=True, related_name="warehouses")
+    code = models.CharField(max_length=12)
+    name = models.CharField(max_length=120)
+    address = models.TextField(blank=True)
+    is_transit = models.BooleanField(default=False, help_text="System warehouse holding goods in transit between sites.")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["code"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "code"], name="uniq_warehouse_code"),
+            models.UniqueConstraint(fields=["organization"], condition=Q(is_transit=True), name="one_transit_warehouse"),
+        ]
+
+    def __str__(self):
+        return f"{self.code} {self.name}"
+
+
+class StorageLocation(TimeStampedModel):
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name="locations")
+    code = models.CharField(max_length=20)
+    name = models.CharField(max_length=80, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["warehouse", "code"]
+        constraints = [models.UniqueConstraint(fields=["warehouse", "code"], name="uniq_location_code")]
+
+    def __str__(self):
+        return f"{self.warehouse.code}/{self.code}"
+
+
+class Batch(TimeStampedModel):
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="+")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="batches")
+    batch_number = models.CharField(max_length=60)
+    manufacture_date = models.DateField(null=True, blank=True)
+    expiry_date = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["expiry_date", "batch_number"]
+        verbose_name_plural = "batches"
+        constraints = [models.UniqueConstraint(fields=["product", "batch_number"], name="uniq_batch")]
+
+    def __str__(self):
+        return self.batch_number
+
+
+class SerialStatus(models.TextChoices):
+    IN_STOCK = "IN_STOCK", "In stock"
+    IN_TRANSIT = "IN_TRANSIT", "In transit"
+    DELIVERED = "DELIVERED", "Delivered"
+    RETURNED_TO_SUPPLIER = "RETURNED_TO_SUPPLIER", "Returned to supplier"
+    WRITTEN_OFF = "WRITTEN_OFF", "Written off"
+
+
+class SerialNumber(TimeStampedModel):
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="+")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="serials")
+    serial = models.CharField(max_length=80)
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    batch = models.ForeignKey(Batch, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    status = models.CharField(max_length=24, choices=SerialStatus.choices, default=SerialStatus.IN_STOCK)
+
+    class Meta:
+        ordering = ["serial"]
+        constraints = [models.UniqueConstraint(fields=["product", "serial"], name="uniq_serial")]
+
+
+class MovementType(models.TextChoices):
+    OPENING = "OPENING", "Opening stock"
+    RECEIPT = "RECEIPT", "Goods receipt"
+    ISSUE = "ISSUE", "Sales delivery"
+    TRANSFER_OUT = "TRANSFER_OUT", "Transfer out"
+    TRANSFER_IN = "TRANSFER_IN", "Transfer in"
+    ADJUSTMENT = "ADJUSTMENT", "Stock adjustment"
+    DAMAGE = "DAMAGE", "Damaged / expired write-off"
+    SALES_RETURN = "SALES_RETURN", "Sales return"
+    PURCHASE_RETURN = "PURCHASE_RETURN", "Purchase return"
+    COUNT = "COUNT", "Stock count reconciliation"
+    REVERSAL = "REVERSAL", "Reversal"
+
+
+# Movement types that can be created directly from the Stock Movements screen.
+MANUAL_MOVEMENT_TYPES = (MovementType.OPENING, MovementType.ADJUSTMENT, MovementType.DAMAGE)
+
+
+class MovementStatus(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    POSTED = "POSTED", "Posted"
+    CANCELLED = "CANCELLED", "Cancelled"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class StockMovement(OrganizationOwned):
+    """Header for every posted change to stock, manual or generated by another document."""
+
+    number = models.CharField(max_length=40, blank=True)
+    movement_type = models.CharField(max_length=16, choices=MovementType.choices)
+    date = models.DateField()
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="movements")
+    reason = models.CharField(max_length=255, blank=True)
+    reference_type = models.CharField(max_length=40, blank=True)
+    reference_id = models.PositiveBigIntegerField(null=True, blank=True)
+    reference_number = models.CharField(max_length=40, blank=True)
+    status = models.CharField(max_length=10, choices=MovementStatus.choices, default=MovementStatus.DRAFT)
+    posted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    posted_at = models.DateTimeField(null=True, blank=True)
+    journal = models.ForeignKey("accounting.JournalEntry", on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    reversal_of = models.OneToOneField("self", on_delete=models.PROTECT, null=True, blank=True, related_name="reversed_by")
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "number"], condition=~Q(number=""), name="uniq_movement_number")
+        ]
+        indexes = [models.Index(fields=["organization", "reference_type", "reference_id"])]
+
+    def __str__(self):
+        return self.number or f"Draft movement #{self.pk}"
+
+
+class StockMovementLine(models.Model):
+    movement = models.ForeignKey(StockMovement, on_delete=models.CASCADE, related_name="lines")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="+")
+    location = models.ForeignKey(StorageLocation, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    quantity = models.DecimalField(**QTY_DIGITS, help_text="Signed for adjustments; positive otherwise.")
+    unit_cost = models.DecimalField(**RATE_DIGITS, null=True, blank=True, help_text="Required for inbound stock without a source cost.")
+    batch_number = models.CharField(max_length=60, blank=True)
+    expiry_date = models.DateField(null=True, blank=True)
+    serial_numbers = models.JSONField(default=list, blank=True)
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["movement", "id"]
+
+
+class StockLedgerEntry(models.Model):
+    """Immutable posted stock change. Quantity and value are signed (+ in, − out)."""
+
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="+")
+    movement = models.ForeignKey(StockMovement, on_delete=models.PROTECT, related_name="ledger_entries")
+    movement_type = models.CharField(max_length=16, choices=MovementType.choices)
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="ledger_entries")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="ledger_entries")
+    location = models.ForeignKey(StorageLocation, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    batch = models.ForeignKey(Batch, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    date = models.DateField()
+    quantity = models.DecimalField(**QTY_DIGITS)
+    unit_cost = models.DecimalField(**RATE_DIGITS)
+    value = models.DecimalField(**MONEY_DIGITS)
+    balance_quantity = models.DecimalField(**QTY_DIGITS, help_text="On-hand quantity in the warehouse after this entry")
+    balance_value = models.DecimalField(**MONEY_DIGITS)
+    reference_type = models.CharField(max_length=40, blank=True)
+    reference_id = models.PositiveBigIntegerField(null=True, blank=True)
+    reference_number = models.CharField(max_length=40, blank=True)
+    serial_numbers = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, related_name="+")
+    posted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["date", "id"]
+        verbose_name_plural = "stock ledger entries"
+        constraints = [models.CheckConstraint(condition=~Q(quantity=0), name="ledger_quantity_nonzero")]
+        indexes = [
+            models.Index(fields=["organization", "product", "warehouse", "date"]),
+            models.Index(fields=["organization", "date"]),
+            models.Index(fields=["organization", "reference_type", "reference_id"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise RuntimeError("Posted stock ledger entries are immutable")
+        super().save(*args, **kwargs)
+
+
+class StockBalance(models.Model):
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="+")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="balances")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="balances")
+    on_hand = models.DecimalField(**QTY_DIGITS, default=0)
+    reserved = models.DecimalField(**QTY_DIGITS, default=0)
+    value = models.DecimalField(**MONEY_DIGITS, default=0)
+    last_unit_cost = models.DecimalField(**RATE_DIGITS, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["product", "warehouse"], name="uniq_stock_balance"),
+            models.CheckConstraint(condition=Q(reserved__gte=0), name="reserved_non_negative"),
+        ]
+
+    @property
+    def available(self):
+        return self.on_hand - self.reserved
+
+
+class CostLayer(models.Model):
+    """FIFO cost layer. Inbound entries create layers; outbound entries consume the oldest first."""
+
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="+")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="+")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="+")
+    batch = models.ForeignKey(Batch, on_delete=models.PROTECT, null=True, blank=True, related_name="layers")
+    source_entry = models.ForeignKey(StockLedgerEntry, on_delete=models.PROTECT, related_name="layers")
+    date = models.DateField()
+    original_quantity = models.DecimalField(**QTY_DIGITS)
+    remaining_quantity = models.DecimalField(**QTY_DIGITS)
+    unit_cost = models.DecimalField(**RATE_DIGITS)
+
+    class Meta:
+        ordering = ["date", "id"]
+        constraints = [models.CheckConstraint(condition=Q(remaining_quantity__gte=0), name="layer_remaining_non_negative")]
+        indexes = [models.Index(fields=["product", "warehouse", "remaining_quantity"])]
+
+
+class ReservationStatus(models.TextChoices):
+    ACTIVE = "ACTIVE", "Active"
+    RELEASED = "RELEASED", "Released"
+    CONSUMED = "CONSUMED", "Consumed by delivery"
+
+
+class StockReservation(TimeStampedModel):
+    organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT, related_name="+")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="+")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="+")
+    sales_order_line = models.ForeignKey("sales.SalesOrderLine", on_delete=models.PROTECT, related_name="reservations")
+    quantity = models.DecimalField(**QTY_DIGITS)
+    open_quantity = models.DecimalField(**QTY_DIGITS)
+    status = models.CharField(max_length=10, choices=ReservationStatus.choices, default=ReservationStatus.ACTIVE)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [models.CheckConstraint(condition=Q(open_quantity__gte=0), name="reservation_open_non_negative")]
+
+
+class TransferStatus(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    IN_TRANSIT = "IN_TRANSIT", "In transit"
+    RECEIVED = "RECEIVED", "Received"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class StockTransfer(OrganizationOwned):
+    number = models.CharField(max_length=40, blank=True)
+    date = models.DateField()
+    source_warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="+")
+    destination_warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="+")
+    status = models.CharField(max_length=12, choices=TransferStatus.choices, default=TransferStatus.DRAFT)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    dispatched_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    received_date = models.DateField(null=True, blank=True)
+    received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    dispatch_movement = models.ForeignKey(StockMovement, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    receipt_movement = models.ForeignKey(StockMovement, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "number"], condition=~Q(number=""), name="uniq_transfer_number"),
+            models.CheckConstraint(
+                condition=~Q(source_warehouse=models.F("destination_warehouse")), name="transfer_distinct_warehouses"
+            ),
+        ]
+
+    def __str__(self):
+        return self.number or f"Draft transfer #{self.pk}"
+
+
+class StockTransferLine(models.Model):
+    transfer = models.ForeignKey(StockTransfer, on_delete=models.CASCADE, related_name="lines")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="+")
+    quantity = models.DecimalField(**QTY_DIGITS)
+    batch_number = models.CharField(max_length=60, blank=True)
+    serial_numbers = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["transfer", "id"]
+        constraints = [models.CheckConstraint(condition=Q(quantity__gt=0), name="transfer_line_qty_positive")]
+
+
+class CountStatus(models.TextChoices):
+    DRAFT = "DRAFT", "Counting"
+    POSTED = "POSTED", "Posted"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class StockCount(OrganizationOwned):
+    number = models.CharField(max_length=40, blank=True)
+    date = models.DateField()
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="+")
+    status = models.CharField(max_length=10, choices=CountStatus.choices, default=CountStatus.DRAFT)
+    adjustment_movement = models.ForeignKey(StockMovement, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    posted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    posted_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "number"], condition=~Q(number=""), name="uniq_count_number")
+        ]
+
+    def __str__(self):
+        return self.number or f"Draft count #{self.pk}"
+
+
+class StockCountLine(models.Model):
+    count = models.ForeignKey(StockCount, on_delete=models.CASCADE, related_name="lines")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="+")
+    system_quantity = models.DecimalField(**QTY_DIGITS, help_text="Snapshot when the line was added")
+    counted_quantity = models.DecimalField(**QTY_DIGITS, null=True, blank=True)
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["count", "id"]
+        constraints = [models.UniqueConstraint(fields=["count", "product"], name="uniq_count_product")]
+
+    @property
+    def difference(self):
+        if self.counted_quantity is None:
+            return None
+        return self.counted_quantity - self.system_quantity

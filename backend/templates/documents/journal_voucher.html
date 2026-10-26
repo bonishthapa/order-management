@@ -1,0 +1,27 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <table class="kv">
+      <tr><td>Voucher no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Fiscal year / period</td><td>{{ doc.fiscal_year.name }} / {{ doc.period.name }}</td></tr>
+      <tr><td>Source</td><td>{{ doc.get_source_display }}{% if doc.source_number %} – {{ doc.source_number }}{% endif %}</td></tr>
+      {% if doc.reversal_of %}<tr><td>Reverses</td><td>{{ doc.reversal_of.number }}</td></tr>{% endif %}
+    </table>
+  </div>
+  <div class="box"><h3>Narration</h3><div style="white-space:pre-line">{{ doc.narration }}</div></div>
+</div>
+<table class="items">
+  <thead><tr><th>Code</th><th>Account</th><th>Party / particulars</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+  <tbody>
+  {% for line in doc.lines.all %}
+    <tr><td>{{ line.account.code }}</td><td>{{ line.account.name }}</td>
+      <td class="small">{% if line.customer %}{{ line.customer.name }}{% elif line.supplier %}{{ line.supplier.name }}{% endif %}{% if line.description %} {{ line.description }}{% endif %}</td>
+      <td class="num">{% if line.debit %}{% amount line.debit %}{% endif %}</td><td class="num">{% if line.credit %}{% amount line.credit %}{% endif %}</td></tr>
+  {% endfor %}
+  <tr><td colspan="3" style="text-align:right"><strong>Total</strong></td><td class="num"><strong>{% amount doc.total_debit %}</strong></td><td class="num"><strong>{% amount doc.total_credit %}</strong></td></tr>
+  </tbody>
+</table>
+{% with sig1="Prepared by" sig1_name=doc.created_by.full_name sig2="Posted by" sig2_name=doc.posted_by.full_name sig3="Approved by" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

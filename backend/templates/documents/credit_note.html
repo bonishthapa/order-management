@@ -1,0 +1,29 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Customer</h3>
+    <div class="name">{{ doc.customer.name }}</div>
+    <div style="white-space:pre-line">{{ doc.customer.billing_address }}</div>
+    {% if doc.customer.tax_id %}<div>PAN/VAT: {{ doc.customer.tax_id }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Credit note no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Original invoice</td><td>{{ doc.invoice.number }} ({% bizdate doc.invoice.invoice_date %})</td></tr>
+      <tr><td>Returned to</td><td>{{ doc.warehouse.name }}</td></tr>
+    </table>
+  </div>
+</div>
+<div class="box" style="margin-top:8pt"><h3>Reason for return</h3>{{ doc.reason }}</div>
+{% with lines=doc.lines.all %}{% include "documents/_lines.html" %}{% endwith %}
+{% include "documents/_totals.html" %}
+<table class="kv" style="width:44%; margin-left:auto; margin-top:4pt">
+  <tr><td>Applied to invoices</td><td class="num">{% amount doc.credit_applied %}</td></tr>
+  <tr><td>Refunded</td><td class="num">{% amount doc.refunded_amount %}</td></tr>
+  <tr><td>Unapplied credit</td><td class="num">{% amount doc.unapplied_credit %}</td></tr>
+</table>
+{% with sig1="Prepared by" sig1_name=doc.posted_by.full_name sig2="Inspected by" sig3="Authorised signature" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

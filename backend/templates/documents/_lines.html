@@ -1,0 +1,20 @@
+{% load erp %}<table class="items">
+  <thead><tr>
+    <th style="width:4%">#</th><th>Item</th><th class="num">Qty</th><th class="num">Rate</th>
+    <th class="num">Disc %</th><th class="num">Taxable</th><th class="num">VAT %</th><th class="num">Amount</th>
+  </tr></thead>
+  <tbody>
+  {% for line in lines %}
+    <tr>
+      <td>{{ forloop.counter }}</td>
+      <td><strong>{{ line.product.name }}</strong><div class="small">{{ line.product.sku }}{% if line.description %} · {{ line.description }}{% endif %}{% if line.batch_number %} · Batch {{ line.batch_number }}{% endif %}{% if line.serial_numbers %} · S/N {{ line.serial_numbers|join:", " }}{% endif %}</div></td>
+      <td class="num">{{ line.quantity|qty }} {{ line.product.unit.code }}</td>
+      <td class="num">{% amount line.unit_price %}</td>
+      <td class="num">{% if line.discount_percent %}{{ line.discount_percent|floatformat:"-2" }}{% else %}–{% endif %}</td>
+      <td class="num">{% amount line.taxable_amount %}</td>
+      <td class="num">{{ line.tax_percent|floatformat:"-2" }}</td>
+      <td class="num">{% amount line.line_total %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>

@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { font-size: 14px; }
+  body { @apply bg-surface-muted text-slate-800 antialiased; font-feature-settings: "cv11", "ss01"; }
+  :focus-visible { @apply outline-none ring-2 ring-brand-400 ring-offset-1; }
+  input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  ::selection { @apply bg-brand-100; }
+}
+
+@layer components {
+  .control {
+    @apply h-8 w-full rounded border border-line-strong bg-white px-2.5 text-[13px] text-slate-800 placeholder:text-slate-400
+      transition-colors hover:border-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100
+      disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-slate-500;
+  }
+  .control-invalid { @apply border-red-400 focus:border-red-500 focus:ring-red-100; }
+  .num { font-variant-numeric: tabular-nums; @apply text-right; }
+  .panel { @apply rounded-md border border-line bg-white shadow-card; }
+  .panel-header { @apply flex items-center justify-between gap-3 border-b border-line px-4 py-2.5; }
+  .panel-title { @apply text-[13px] font-semibold text-slate-700; }
+  .kv-label { @apply text-2xs font-medium uppercase tracking-wide text-slate-500; }
+  .link { @apply text-brand-600 hover:text-brand-800 hover:underline; }
+}
+
+/* AG Grid: align the Quartz theme with the application design system. */
+.ag-theme-quartz.erp-grid {
+  --ag-font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  --ag-font-size: 13px;
+  --ag-grid-size: 5px;
+  --ag-row-height: 34px;
+  --ag-header-height: 34px;
+  --ag-header-background-color: #f7f8fa;
+  --ag-header-foreground-color: #475569;
+  --ag-header-cell-hover-background-color: #eef1f5;
+  --ag-border-color: #e2e5ea;
+  --ag-row-border-color: #eef0f3;
+  --ag-row-hover-color: #f4f7fb;
+  --ag-selected-row-background-color: #e8eef7;
+  --ag-active-color: #37567f;
+  --ag-wrapper-border-radius: 0;
+  --ag-border-radius: 4px;
+  --ag-cell-horizontal-padding: 10px;
+  --ag-odd-row-background-color: #ffffff;
+}
+.ag-theme-quartz.erp-grid .ag-root-wrapper { border: none; }
+.ag-theme-quartz.erp-grid .ag-header-cell-text { font-weight: 600; font-size: 12px; }
+.ag-theme-quartz.erp-grid .ag-cell.num-cell { font-variant-numeric: tabular-nums; }
+.ag-theme-quartz.erp-grid .ag-row.clickable { cursor: pointer; }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+}

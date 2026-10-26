@@ -1,0 +1,24 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>{% if doc.customer_id %}Refunded to{% else %}Received from{% endif %}</h3>
+    <div class="name">{% if doc.customer_id %}{{ doc.customer.name }}{% else %}{{ doc.supplier.name }}{% endif %}</div>
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Number</td><td><strong>{{ doc.number }}</strong></td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Method</td><td>{{ doc.payment_method.name }}</td></tr>
+      {% if doc.reference %}<tr><td>Reference</td><td>{{ doc.reference }}</td></tr>{% endif %}
+      <tr><td>Against</td><td>{% if doc.receipt_id %}{{ doc.receipt.number }}{% elif doc.credit_note_id %}{{ doc.credit_note.number }}{% elif doc.voucher_id %}{{ doc.voucher.number }}{% elif doc.debit_note_id %}{{ doc.debit_note.number }}{% endif %}</td></tr>
+    </table>
+  </div>
+</div>
+<div class="box" style="margin-top:10pt; font-size:10pt">
+  Amount: <strong>{{ organization.currency_symbol }} {% amount doc.amount %}</strong>
+  <div class="words">{{ doc.amount|words }}</div>
+</div>
+{% if doc.notes %}<div class="terms">{{ doc.notes }}</div>{% endif %}
+{% include "documents/_signatures.html" %}
+{% endblock %}

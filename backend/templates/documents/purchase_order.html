@@ -1,0 +1,34 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Supplier</h3>
+    <div class="name">{{ doc.supplier.name }}</div>
+    <div style="white-space:pre-line">{{ doc.supplier.address }}</div>
+    {% if doc.supplier.tax_id %}<div>PAN/VAT: {{ doc.supplier.tax_id }}</div>{% endif %}
+    {% if doc.supplier.phone %}<div>Phone: {{ doc.supplier.phone }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <h3>Deliver to</h3>
+    <div class="name">{{ doc.warehouse.name }}</div>
+    <div style="white-space:pre-line">{{ doc.warehouse.address|default:organization.address }}</div>
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>PO no.</td><td><strong>{{ doc.number }}</strong></td></tr>
+      <tr><td>Order date</td><td>{% bizdate doc.order_date %}</td></tr>
+      {% if doc.expected_delivery_date %}<tr><td>Deliver by</td><td>{% bizdate doc.expected_delivery_date %}</td></tr>{% endif %}
+      {% if doc.supplier_reference %}<tr><td>Supplier ref.</td><td>{{ doc.supplier_reference }}</td></tr>{% endif %}
+      <tr><td>Payment terms</td><td>{{ doc.payment_terms_days }} days</td></tr>
+      <tr><td>Status</td><td>{{ doc.get_status_display }}</td></tr>
+    </table>
+  </div>
+</div>
+{% with lines=doc.lines.all %}{% include "documents/_lines.html" %}{% endwith %}
+{% include "documents/_totals.html" %}
+{% if doc.notes %}<div class="terms"><strong>Notes</strong>
+{{ doc.notes }}</div>{% endif %}
+{% if doc.terms %}<div class="terms"><strong>Terms</strong>
+{{ doc.terms }}</div>{% endif %}
+{% with sig1="Prepared by" sig1_name=doc.created_by.full_name sig2="Approved by" sig2_name=doc.approved_by.full_name sig3="Supplier acceptance" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}

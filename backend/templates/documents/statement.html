@@ -1,0 +1,43 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>{% if party_kind == "customer" %}Customer{% else %}Supplier{% endif %}</h3>
+    <div class="name">{{ party.name }} ({{ party.code }})</div>
+    <div style="white-space:pre-line">{% if party_kind == "customer" %}{{ party.billing_address }}{% else %}{{ party.address }}{% endif %}</div>
+    {% if party.tax_id %}<div>PAN/VAT: {{ party.tax_id }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Period</td><td>{% if range.start %}{% bizdate range.start %}{% else %}Beginning{% endif %} – {% bizdate as_of %}</td></tr>
+      {% if range.fiscal_year %}<tr><td>Fiscal year</td><td>{{ range.fiscal_year.name }}</td></tr>{% endif %}
+      <tr><td>Opening balance</td><td class="num">{% amount ledger.opening_balance %}</td></tr>
+      <tr><td>Closing balance</td><td class="num"><strong>{% amount ledger.closing_balance %}</strong></td></tr>
+    </table>
+  </div>
+</div>
+<table class="items">
+  <thead><tr><th>Date</th><th>Document</th><th>Particulars</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+  <tbody>
+    <tr><td colspan="5"><em>Opening balance</em></td><td class="num">{% amount ledger.opening_balance %}</td></tr>
+    {% for r in ledger.rows %}
+    <tr><td>{% bizdate r.date %}</td><td>{{ r.source_number|default:r.journal_number }}</td><td>{{ r.narration }}</td>
+      <td class="num">{% if r.debit %}{% amount r.debit %}{% endif %}</td><td class="num">{% if r.credit %}{% amount r.credit %}{% endif %}</td>
+      <td class="num">{% amount r.balance %}</td></tr>
+    {% endfor %}
+    <tr><td colspan="3" style="text-align:right"><strong>Totals</strong></td><td class="num"><strong>{% amount ledger.total_debit %}</strong></td><td class="num"><strong>{% amount ledger.total_credit %}</strong></td><td class="num"><strong>{% amount ledger.closing_balance %}</strong></td></tr>
+  </tbody>
+</table>
+{% if aging.documents %}
+<h3 style="margin-top:12pt; font-size:9pt">Open items as of {% bizdate as_of %}</h3>
+<table class="items" style="margin-top:4pt">
+  <thead><tr><th>Document</th><th>Date</th><th>Due</th><th class="num">Days overdue</th><th class="num">Total</th><th class="num">Outstanding</th></tr></thead>
+  <tbody>{% for d in aging.documents %}<tr><td>{{ d.number }}</td><td>{% bizdate d.date %}</td><td>{% bizdate d.due_date %}</td><td class="num">{{ d.days_overdue }}</td><td class="num">{% amount d.total %}</td><td class="num">{% amount d.outstanding %}</td></tr>{% endfor %}</tbody>
+</table>
+<table class="items" style="margin-top:6pt">
+  <thead><tr>{% for b in aging.buckets %}<th class="num">{{ b.label }}</th>{% endfor %}<th class="num">Total</th></tr></thead>
+  <tbody><tr>{% for b in aging.buckets %}<td class="num">{% for k, v in aging.totals.items %}{% if k == b.key %}{% amount v %}{% endif %}{% endfor %}</td>{% endfor %}<td class="num"><strong>{% amount aging.totals.total %}</strong></td></tr></tbody>
+</table>
+{% endif %}
+<div class="terms">Please report any difference within 15 days of receiving this statement.</div>
+{% endblock %}

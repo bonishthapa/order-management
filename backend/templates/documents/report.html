@@ -1,0 +1,30 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block extra_style %}
+  table.items td, table.items th { font-size: 7.6pt; padding: 3pt 4pt; }
+  tr.heading td { font-weight: 700; background: #f9fafb; }
+  tr.subtotal td { font-weight: 600; border-top: 0.6pt solid #9ca3af; }
+  tr.total td, tr.grand td { font-weight: 700; border-top: 1pt solid #111827; }
+  .basis { margin-top: 6pt; font-size: 7.6pt; color: #4b5563; }
+{% endblock %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <div class="name">{{ report.title }}</div>
+    <div>{% if report.period == "as_of" %}As of {% bizdate report.as_of %}{% elif report.period == "range" %}{% if report.range.start %}{% bizdate report.range.start %}{% else %}Beginning{% endif %} – {% if report.range.end %}{% bizdate report.range.end %}{% else %}today{% endif %}{% endif %}{% if report.range.fiscal_year_name %} · FY {{ report.range.fiscal_year_name }}{% endif %}</div>
+    <div class="basis">{{ report.basis }}</div>
+  </div>
+</div>
+<table class="items">
+  <thead><tr>{% for c in report.columns %}<th class="{% if c.type == 'money' or c.type == 'qty' or c.type == 'number' or c.type == 'percent' %}num{% endif %}">{{ c.label }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for row in report.rows %}
+    <tr class="{{ row.style|default:'' }}">{% for c in report.columns %}{% for k, v in row.items %}{% if k == c.key %}<td class="{% if c.type == 'money' or c.type == 'qty' or c.type == 'number' or c.type == 'percent' %}num{% endif %}">{% if v == None %}{% elif c.type == 'money' %}{% amount v %}{% elif c.type == 'date' %}{% bizdate v %}{% elif c.type == 'qty' %}{{ v|qty }}{% else %}{{ v }}{% endif %}</td>{% endif %}{% endfor %}{% if c.key not in row %}<td></td>{% endif %}{% endfor %}</tr>
+  {% empty %}<tr><td colspan="{{ report.columns|length }}" class="small">No records for this selection.</td></tr>
+  {% endfor %}
+  {% if report.totals %}
+  <tr class="total">{% for c in report.columns %}<td class="num">{% if forloop.first %}Total{% else %}{% for k, v in report.totals.items %}{% if k == c.key %}{% if c.type == 'money' %}{% amount v %}{% else %}{{ v }}{% endif %}{% endif %}{% endfor %}{% endif %}</td>{% endfor %}</tr>
+  {% endif %}
+  </tbody>
+</table>
+{% for note in report.notes %}<div class="basis">{{ note }}</div>{% endfor %}
+{% endblock %}

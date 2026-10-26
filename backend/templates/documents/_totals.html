@@ -1,0 +1,26 @@
+{% load erp %}<div class="summary">
+  <div class="left">
+    {% if tax_breakdown %}
+    <table class="items" style="width:85%; margin-top:0">
+      <thead><tr><th>VAT rate</th><th class="num">Taxable amount</th><th class="num">VAT</th></tr></thead>
+      <tbody>{% for t in tax_breakdown %}<tr><td>{{ t.rate|floatformat:"-2" }}%</td><td class="num">{% amount t.taxable %}</td><td class="num">{% amount t.tax %}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% endif %}
+    <div class="words">In words: {{ doc.grand_total|words }}</div>
+  </div>
+  <table class="totals">
+    <tr><td>Subtotal</td><td class="num">{% amount doc.subtotal %}</td></tr>
+    {% if doc.discount_total %}<tr><td>Discount</td><td class="num">− {% amount doc.discount_total %}</td></tr>{% endif %}
+    <tr><td>Taxable amount</td><td class="num">{% amount doc.taxable_total %}</td></tr>
+    <tr><td>VAT</td><td class="num">{% amount doc.tax_total %}</td></tr>
+    {% if doc.freight %}<tr><td>Freight</td><td class="num">{% amount doc.freight %}</td></tr>{% endif %}
+    {% if doc.other_charges %}<tr><td>Other charges</td><td class="num">{% amount doc.other_charges %}</td></tr>{% endif %}
+    <tr class="grand"><td>Grand total</td><td class="num">{{ organization.currency_symbol }} {% amount doc.grand_total %}</td></tr>
+    {% block after_totals %}{% endblock %}
+    {% if show_balance %}
+    <tr><td>Paid</td><td class="num">{% amount doc.amount_paid %}</td></tr>
+    {% if doc.amount_credited %}<tr><td>Credited</td><td class="num">{% amount doc.amount_credited %}</td></tr>{% endif %}
+    <tr><td><strong>Balance due</strong></td><td class="num"><strong>{% amount doc.balance_due %}</strong></td></tr>
+    {% endif %}
+  </table>
+</div>

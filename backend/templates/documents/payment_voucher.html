@@ -1,0 +1,39 @@
+{% extends "documents/base.html" %}{% load erp %}
+{% block content %}
+<div class="meta-grid">
+  <div class="box">
+    <h3>Paid to</h3>
+    <div class="name">{{ doc.supplier.name }}</div>
+    <div style="white-space:pre-line">{{ doc.supplier.address }}</div>
+    {% if doc.supplier.tax_id %}<div>PAN/VAT: {{ doc.supplier.tax_id }}</div>{% endif %}
+  </div>
+  <div class="box">
+    <table class="kv">
+      <tr><td>Voucher no.</td><td><strong>{{ doc.number|default:"(draft)" }}</strong></td></tr>
+      <tr><td>Fiscal year</td><td>{{ doc.fiscal_year.name|default:"–" }}</td></tr>
+      <tr><td>Date</td><td>{% bizdate doc.date %}</td></tr>
+      <tr><td>Method</td><td>{{ doc.payment_method.name }}</td></tr>
+      <tr><td>Paid from</td><td>{{ doc.paid_from_account.name }}</td></tr>
+      {% if doc.reference %}<tr><td>Reference</td><td>{{ doc.reference }}</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+<div class="box" style="margin-top:10pt; font-size:10pt">
+  Amount paid: <strong>{{ organization.currency_symbol }} {% amount doc.amount %}</strong>
+  <div class="words">{{ doc.amount|words }}</div>
+</div>
+<table class="items">
+  <thead><tr><th>Bill</th><th>Supplier invoice</th><th>Bill date</th><th class="num">Bill total</th><th class="num">Paid now</th></tr></thead>
+  <tbody>
+  {% for a in doc.allocations.all %}{% if a.is_active %}
+    <tr><td>{{ a.bill.number }}</td><td>{{ a.bill.supplier_invoice_number }}</td><td>{% bizdate a.bill.bill_date %}</td><td class="num">{% amount a.bill.grand_total %}</td><td class="num">{% amount a.amount %}</td></tr>
+  {% endif %}{% empty %}<tr><td colspan="5" class="small">Not applied to any bill (advance to supplier).</td></tr>{% endfor %}
+  </tbody>
+</table>
+<table class="totals" style="margin-left:auto; margin-top:6pt">
+  <tr><td>Applied to bills</td><td class="num">{% amount doc.allocated_amount %}</td></tr>
+  <tr class="grand"><td>Unapplied (advance)</td><td class="num">{% amount doc.unapplied_amount %}</td></tr>
+</table>
+{% if doc.notes %}<div class="terms">{{ doc.notes }}</div>{% endif %}
+{% with sig1="Prepared by" sig1_name=doc.prepared_by.full_name sig2="Approved by" sig2_name=doc.approved_by.full_name sig3="Received by (supplier)" %}{% include "documents/_signatures.html" %}{% endwith %}
+{% endblock %}
