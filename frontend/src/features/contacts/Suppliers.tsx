@@ -1,0 +1,298 @@
+import { Pencil, Plus } from "lucide-react";
+import { useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api, errorMessage, fieldErrors } from "@/api/client";
+import { useDetail, useGet } from "@/api/hooks";
+import { DateText } from "@/calendar/DateText";
+import { useAuth } from "@/auth/AuthContext";
+import { col, type ColumnContext } from "@/components/data/columns";
+import { ResourceList } from "@/components/data/ResourceList";
+import { Button } from "@/components/ui/Button";
+import { ErrorState, LoadingBlock } from "@/components/ui/Feedback";
+import { Field } from "@/components/ui/Field";
+import { Input, NumberInput, Textarea } from "@/components/ui/Input";
+import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
+import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
+import { formatAmount, toNumber } from "@/utils/format";
+import {
+  ACTIVE_OPTIONS, ActiveBadge, AuditActivity, CategoryField, OpeningBalancePanel, PartyAging, PartyDocuments, PartyLedger,
+  SummaryCard, useCategoryOptions, useFormState,
+} from "./shared";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const BASE = "/contacts/suppliers";
+
+export function SupplierList() {
+  const { can } = useAuth();
+  const navigate = useNavigate();
+  const categories = useCategoryOptions("supplier");
+  return (
+    <>
+      <PageHeader title="Suppliers" subtitle="Balances are payables from posted bills, payments, returns and journals."
+        actions={can("suppliers.manage") && (
+          <Button variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => navigate(`${BASE}/new`)}>New supplier</Button>
+        )} />
+      <ResourceList resource="suppliers" searchPlaceholder="Code, name, contact, phone, PAN…" detailPath={(r) => `${BASE}/${r.id}`}
+        exportUrl="/suppliers/export/" defaultOrdering="name"
+        filters={[
+          { type: "select", name: "category", label: "Category", options: categories },
+          { type: "select", name: "is_active", label: "Status", options: ACTIVE_OPTIONS },
+          { type: "boolean", name: "has_balance", label: "With balance" },
+        ]}
+        columns={() => [
+          col.text("code", "Code", { sortable: true, maxWidth: 130, pinned: "left" }),
+          col.text("name", "Name", { sortable: true, flex: 2, minWidth: 200,
+            cellRenderer: (p: any) => <span className={p.data?.is_active ? "font-medium text-slate-800" : "text-slate-400"}>{p.value}{!p.data?.is_active && " (inactive)"}</span> }),
+          col.text("contact_person", "Contact"),
+          col.text("phone", "Phone"),
+          col.text("tax_id", "PAN/VAT"),
+          col.text("category_name", "Category"),
+          col.number("payment_terms_days", "Terms (days)", { maxWidth: 120 }),
+          col.money("balance", "Balance", { sortable: true }),
+        ]}
+        empty={{ title: "No suppliers", description: "Add a supplier to start raising purchase orders." }} />
+    </>
+  );
+}
+
+interface SupplierValues {
+  code: string; name: string; contact_person: string; phone: string; email: string; address: string; tax_id: string;
+  payment_terms_days: string; category: number | null; bank_name: string; bank_account_name: string; bank_account_number: string;
+  bank_branch: string; notes: string; is_active: boolean;
+}
+
+const blank: SupplierValues = {
+  code: "", name: "", contact_person: "", phone: "", email: "", address: "", tax_id: "", payment_terms_days: "30", category: null,
+  bank_name: "", bank_account_name: "", bank_account_number: "", bank_branch: "", notes: "", is_active: true,
+};
+
+function fromSupplier(s: any): SupplierValues {
+  return {
+    code: s.code ?? "", name: s.name ?? "", contact_person: s.contact_person ?? "", phone: s.phone ?? "", email: s.email ?? "",
+    address: s.address ?? "", tax_id: s.tax_id ?? "", payment_terms_days: String(s.payment_terms_days ?? 30), category: s.category ?? null,
+    bank_name: s.bank_name ?? "", bank_account_name: s.bank_account_name ?? "", bank_account_number: s.bank_account_number ?? "",
+    bank_branch: s.bank_branch ?? "", notes: s.notes ?? "", is_active: !!s.is_active,
+  };
+}
+
+const BANK_KEYS = ["bank_name", "bank_account_name", "bank_account_number", "bank_branch"] as const;
+
+export function SupplierForm() {
+  const { id } = useParams();
+  const query = useDetail<any>("suppliers", id);
+  if (id && query.isLoading) return <LoadingBlock />;
+  if (id && (query.error || !query.data)) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
+  return <SupplierFormBody key={id ?? "new"} initial={query.data} />;
+}
+
+function SupplierFormBody({ initial }: { initial?: any }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { can } = useAuth();
+  const bankVisible = initial ? !!initial.bank_details_visible : can("suppliers.bank_view");
+  const { values: v, setField, errors, setErrors } = useFormState<SupplierValues>(initial ? fromSupplier(initial) : blank);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const e: Record<string, string> = {};
+    if (!v.name.trim()) e.name = "Enter the supplier name.";
+    if (!/^\d+$/.test(v.payment_terms_days)) e.payment_terms_days = "Enter a whole number of days.";
+    setErrors(e);
+    if (Object.keys(e).length) return;
+    setSaving(true);
+    const body: Record<string, unknown> = { ...v, payment_terms_days: Number(v.payment_terms_days) };
+    if (!bankVisible) BANK_KEYS.forEach((k) => delete body[k]);
+    try {
+      const { data } = initial ? await api.patch(`/suppliers/${initial.id}/`, body) : await api.post("/suppliers/", body);
+      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      toast.success(initial ? "Supplier updated" : `Supplier ${data.code} created`);
+      navigate(`${BASE}/${data.id}`);
+    } catch (err) {
+      setErrors(fieldErrors(err));
+      toast.error(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const text = (key: keyof SupplierValues, label: string, opts: { required?: boolean; hint?: string; className?: string; type?: string } = {}) => (
+    <Field label={label} required={opts.required} error={errors[key]} hint={opts.hint} className={opts.className}>
+      <Input type={opts.type} value={v[key] as string} onChange={(e) => setField(key, e.target.value as any)} invalid={!!errors[key]} />
+    </Field>
+  );
+
+  return (
+    <>
+      <PageHeader title={initial ? `Edit ${initial.name}` : "New supplier"}
+        back={{ to: initial ? `${BASE}/${initial.id}` : BASE, label: initial ? initial.name : "Suppliers" }} />
+      <div className="space-y-4">
+        <Panel title="Supplier">
+          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+            {text("code", "Code", { hint: initial ? undefined : "Leave blank to number automatically." })}
+            {text("name", "Company name", { required: true, className: "lg:col-span-2" })}
+            <CategoryField kind="supplier" value={v.category} onChange={(c) => setField("category", c)} canCreate={can("suppliers.manage")}
+              error={errors.category} />
+            {text("contact_person", "Contact person")}
+            {text("phone", "Phone")}
+            {text("email", "Email", { type: "email" })}
+            {text("tax_id", "PAN/VAT number")}
+            <Field label="Address" error={errors.address} className="sm:col-span-2">
+              <Textarea value={v.address} onChange={(e) => setField("address", e.target.value)} />
+            </Field>
+            <Field label="Payment terms (days)" required error={errors.payment_terms_days}>
+              <NumberInput value={v.payment_terms_days} onChange={(e) => setField("payment_terms_days", e.target.value)} invalid={!!errors.payment_terms_days} />
+            </Field>
+            <Field label="Status" error={errors.is_active}>
+              <label className="flex h-8 items-center gap-2 text-[13px]">
+                <input type="checkbox" className="accent-brand-600" checked={v.is_active} onChange={(e) => setField("is_active", e.target.checked)} />
+                Active (can be used on new documents)
+              </label>
+            </Field>
+          </div>
+        </Panel>
+        {bankVisible && (
+          <Panel title="Bank details">
+            <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+              {text("bank_name", "Bank")}
+              {text("bank_branch", "Branch")}
+              {text("bank_account_name", "Account name")}
+              {text("bank_account_number", "Account number")}
+            </div>
+            <p className="px-4 pb-3 text-xs text-slate-500">Changes to bank details are recorded in the audit trail.</p>
+          </Panel>
+        )}
+        <Panel title="Notes">
+          <div className="p-4">
+            <Textarea value={v.notes} onChange={(e) => setField("notes", e.target.value)} aria-label="Notes" />
+          </div>
+        </Panel>
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => navigate(-1)}>Cancel</Button>
+          <Button variant="primary" loading={saving} onClick={submit}>{initial ? "Save changes" : "Create supplier"}</Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+interface SupplierSummary {
+  balance: number | string; overdue_amount: number | string; overdue_count: number; open_orders: number;
+  last_bill_date: string | null; unapplied_payments: number | string;
+}
+
+const orderColumns = (ctx: ColumnContext) => [
+  col.doc("number", "Order", { sortable: true }), col.date("order_date", "Date", ctx, { sortable: true }),
+  col.date("expected_delivery_date", "Expected", ctx), col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
+  col.status("status", "Status", "status_label"), col.money("grand_total", "Amount", { sortable: true }),
+];
+const billColumns = (ctx: ColumnContext) => [
+  col.doc("number", "Bill", { sortable: true }), col.text("supplier_invoice_number", "Supplier invoice"),
+  col.date("bill_date", "Date", ctx, { sortable: true }), col.date("due_date", "Due", ctx, { sortable: true }),
+  col.status("status", "Status", "status_label"), col.status("payment_status", "Payment", "payment_status_label"),
+  col.money("grand_total", "Amount", { sortable: true }), col.money("balance_due", "Outstanding"),
+];
+const paymentColumns = (ctx: ColumnContext) => [
+  col.doc("number", "Voucher", { sortable: true }), col.date("date", "Date", ctx, { sortable: true }),
+  col.text("payment_method_name", "Method"), col.text("paid_from_account_name", "Paid from", { flex: 2 }),
+  col.text("reference", "Reference"), col.status("status"), col.money("amount", "Amount", { sortable: true }),
+  col.money("unapplied_amount", "Unapplied"),
+];
+
+export function SupplierDetail() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { can } = useAuth();
+  const [search, setSearch] = useSearchParams();
+  const query = useDetail<any>("suppliers", id);
+  const summary = useGet<SupplierSummary>(["suppliers", "summary", id], `/suppliers/${id}/summary/`, {}, !!id);
+  if (query.isLoading) return <LoadingBlock />;
+  if (query.error || !query.data) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
+  const sp = query.data;
+  const s = summary.data;
+  const tab = search.get("tab") ?? "overview";
+  const setTab = (t: string) => setSearch((prev) => {
+    const next = new URLSearchParams();
+    if (t !== "overview") next.set("tab", t);
+    if (t === "ledger") ["fiscal_year", "date_from", "date_to"].forEach((k) => prev.get(k) && next.set(k, prev.get(k)!));
+    return next;
+  }, { replace: true });
+
+  const tabs = [
+    { value: "overview", label: "Overview" }, { value: "ledger", label: "Ledger" }, { value: "aging", label: "Aging" },
+    ...(can("purchases.view") ? [{ value: "orders", label: "Purchase orders" }, { value: "bills", label: "Bills" }, { value: "payments", label: "Payments" }] : []),
+    ...(can("audit.view") ? [{ value: "activity", label: "Activity" }] : []),
+  ];
+
+  return (
+    <>
+      <PageHeader back={{ to: BASE, label: "Suppliers" }} title={sp.name} meta={<ActiveBadge active={sp.is_active} />}
+        subtitle={<>{sp.code}{sp.category_name && <> · {sp.category_name}</>}{sp.tax_id && <> · PAN {sp.tax_id}</>}</>}
+        actions={<>
+          {can("purchases.manage") && sp.is_active && <Button onClick={() => navigate(`/purchases/orders/new?supplier=${sp.id}`)}>New purchase order</Button>}
+          {can("purchases.payment") && <Button onClick={() => navigate(`/purchases/payments/new?supplier=${sp.id}`)}>Record payment</Button>}
+          {can("suppliers.manage") && <Button variant="primary" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => navigate(`${BASE}/${sp.id}/edit`)}>Edit</Button>}
+        </>} />
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabList className="mb-4" tabs={tabs} />
+        <TabPanel value="overview" className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <SummaryCard label="Balance payable" value={s ? formatAmount(s.balance) : "…"}
+              hint={s && toNumber(s.balance) < 0 ? "Negative: advance paid to the supplier" : "From the posted ledger"} />
+            <SummaryCard label="Overdue" value={s ? formatAmount(s.overdue_amount) : "…"} tone={s && toNumber(s.overdue_amount) > 0 ? "danger" : "default"}
+              hint={s && `${s.overdue_count} bill${s.overdue_count === 1 ? "" : "s"} past due`} />
+            <SummaryCard label="Open purchase orders" value={s ? s.open_orders : "…"}
+              hint={s?.last_bill_date ? <>Last bill <DateText value={s.last_bill_date} /></> : "No posted bills"} />
+            <SummaryCard label="Unapplied payments" value={s ? formatAmount(s.unapplied_payments) : "…"} hint="Advances not yet set against bills" />
+          </div>
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="space-y-4 lg:col-span-2">
+              <Panel title="Details">
+                <KeyValues items={[
+                  { label: "Code", value: sp.code },
+                  { label: "Contact person", value: sp.contact_person || "–" },
+                  { label: "Phone", value: sp.phone ? <a className="link" href={`tel:${sp.phone}`}>{sp.phone}</a> : "–" },
+                  { label: "Email", value: sp.email ? <a className="link" href={`mailto:${sp.email}`}>{sp.email}</a> : "–" },
+                  { label: "PAN/VAT", value: sp.tax_id || "–" },
+                  { label: "Category", value: sp.category_name ?? "–" },
+                  { label: "Payment terms", value: `${sp.payment_terms_days} days` },
+                  { label: "Address", value: <span className="whitespace-pre-line">{sp.address || "–"}</span>, wide: true },
+                  ...(sp.notes ? [{ label: "Notes", value: <span className="whitespace-pre-line">{sp.notes}</span>, wide: true }] : []),
+                ]} />
+              </Panel>
+              {sp.bank_details_visible && (
+                <Panel title="Bank details">
+                  <KeyValues items={[
+                    { label: "Bank", value: sp.bank_name || "–" },
+                    { label: "Branch", value: sp.bank_branch || "–" },
+                    { label: "Account name", value: sp.bank_account_name || "–" },
+                    { label: "Account number", value: sp.bank_account_number ? <span className="tabular-nums">{sp.bank_account_number}</span> : "–" },
+                  ]} />
+                </Panel>
+              )}
+            </div>
+            <OpeningBalancePanel kind="supplier" party={sp} />
+          </div>
+        </TabPanel>
+        <TabPanel value="ledger"><PartyLedger kind="supplier" party={sp} /></TabPanel>
+        <TabPanel value="aging"><PartyAging kind="supplier" party={sp} /></TabPanel>
+        <TabPanel value="orders">
+          <PartyDocuments resource="purchase-orders" filter="supplier" partyId={sp.id} columns={orderColumns} detailBase="/purchases/orders"
+            gridId="supplier-orders" emptyTitle="No purchase orders" />
+        </TabPanel>
+        <TabPanel value="bills">
+          <PartyDocuments resource="purchase-bills" filter="supplier" partyId={sp.id} columns={billColumns} detailBase="/purchases/bills"
+            gridId="supplier-bills" emptyTitle="No supplier bills" />
+        </TabPanel>
+        <TabPanel value="payments">
+          <PartyDocuments resource="payment-vouchers" filter="supplier" partyId={sp.id} columns={paymentColumns} detailBase="/purchases/payments"
+            gridId="supplier-payments" emptyTitle="No payments"
+            newAction={can("purchases.payment") && <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />}
+              onClick={() => navigate(`/purchases/payments/new?supplier=${sp.id}`)}>Record payment</Button>} />
+        </TabPanel>
+        {can("audit.view") && <TabPanel value="activity"><AuditActivity entityType="supplier" entityId={sp.id} /></TabPanel>}
+      </Tabs>
+    </>
+  );
+}

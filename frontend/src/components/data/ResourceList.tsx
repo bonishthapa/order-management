@@ -18,6 +18,7 @@ export interface ResourceListProps {
   dated?: boolean; // offers fiscal-year and AD/BS date range filters
   searchPlaceholder?: string;
   detailPath?: (row: any) => string;
+  onRowClick?: (row: any) => void;
   defaultOrdering?: string;
   exportUrl?: string;
   exportName?: string;
@@ -28,7 +29,7 @@ export interface ResourceListProps {
 }
 
 /** Server-side paginated, sorted and filtered list. Filter state lives in the URL. */
-export function ResourceList({ resource, columns, filters = [], dated, searchPlaceholder, detailPath, defaultOrdering = "", exportUrl,
+export function ResourceList({ resource, columns, filters = [], dated, searchPlaceholder, detailPath, onRowClick, defaultOrdering = "", exportUrl,
   exportName, extraParams = {}, toolbar, empty, gridId }: ResourceListProps) {
   const navigate = useNavigate();
   const { dateMode } = useAuth();
@@ -75,7 +76,7 @@ export function ResourceList({ resource, columns, filters = [], dated, searchPla
         fetching={query.isFetching}
         error={query.error}
         onRetry={() => query.refetch()}
-        onRowClick={detailPath ? (row) => navigate(detailPath(row)) : undefined}
+        onRowClick={onRowClick ?? (detailPath ? (row) => navigate(detailPath(row)) : undefined)}
         empty={empty}
       />
     </div>

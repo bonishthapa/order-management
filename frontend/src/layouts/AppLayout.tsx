@@ -12,6 +12,7 @@ import { cn } from "@/utils/cn";
 import { formatAmount } from "@/utils/format";
 import { linkFor, TYPE_LABELS } from "@/utils/links";
 import type { DateDisplayMode } from "@/api/types";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { NAV } from "./nav";
 
 export function AppLayout() {
@@ -68,7 +69,9 @@ export function AppLayout() {
         <TopBar onMenu={() => setMobileOpen(true)} />
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1600px] px-4 py-4 lg:px-6">
-            <Outlet />
+            <ErrorBoundary resetKey={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </main>
       </div>

@@ -9,6 +9,7 @@ from django.core.mail import send_mail
 from django.db import transaction
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import exceptions, mixins, serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
@@ -97,7 +98,7 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField()
 
 
-@extend_schema(request=LoginSerializer, tags=["auth"])
+@extend_schema(request=LoginSerializer, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([AuthThrottle])
@@ -120,7 +121,7 @@ def login(request):
     return response
 
 
-@extend_schema(request=None, tags=["auth"])
+@extend_schema(request=None, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([AuthThrottle])
@@ -146,7 +147,7 @@ def refresh(request):
     return response
 
 
-@extend_schema(request=None, tags=["auth"])
+@extend_schema(request=None, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def logout(request):
@@ -173,7 +174,7 @@ def me(request):
     return Response(session_payload(request.user, request))
 
 
-@extend_schema(request=ChangePasswordSerializer, tags=["auth"])
+@extend_schema(request=ChangePasswordSerializer, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
@@ -192,7 +193,7 @@ class EmailSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
 
-@extend_schema(request=EmailSerializer, tags=["auth"])
+@extend_schema(request=EmailSerializer, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([PasswordResetThrottle])
@@ -211,7 +212,7 @@ def password_reset(request):
     return Response({"detail": "If the address belongs to an account, a reset link has been sent."})
 
 
-@extend_schema(request=PasswordResetConfirmSerializer, tags=["auth"])
+@extend_schema(request=PasswordResetConfirmSerializer, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([PasswordResetThrottle])

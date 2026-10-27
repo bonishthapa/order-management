@@ -18,7 +18,7 @@ export function SearchBox({ value, onChange, placeholder = "Search…" }: { valu
   useEffect(() => { if (debounced !== value) onChange(debounced); }, [debounced]); // only push debounced edits
   useEffect(() => setText(value), [value]);
   return (
-    <div className="relative w-full sm:w-64">
+    <div className="relative w-full sm:w-56">
       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
       <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} className="pl-8" aria-label="Search" />
     </div>
@@ -32,14 +32,14 @@ export function PeriodFilter({ values, set, allowAll = true }: {
   const { years } = useFiscalYear();
   return (
     <>
-      <Select aria-label="Fiscal year" className="w-[150px]" value={values.fiscal_year ?? ""} onChange={(e) => set({ fiscal_year: e.target.value })}>
+      <Select aria-label="Fiscal year" className="w-[130px]" value={values.fiscal_year ?? ""} onChange={(e) => set({ fiscal_year: e.target.value })}>
         {allowAll && <option value="all">All years</option>}
         {years.map((fy) => <option key={fy.id} value={fy.id}>FY {fy.name}</option>)}
       </Select>
       <div className="flex items-center gap-1">
-        <DatePicker compact value={values.date_from ?? ""} onChange={(v) => set({ date_from: v })} placeholder="From" className="w-[150px]" />
+        <DatePicker compact value={values.date_from ?? ""} onChange={(v) => set({ date_from: v })} placeholder="From" className="w-[138px]" />
         <span className="text-slate-400">–</span>
-        <DatePicker compact value={values.date_to ?? ""} onChange={(v) => set({ date_to: v })} placeholder="To" className="w-[150px]" />
+        <DatePicker compact value={values.date_to ?? ""} onChange={(v) => set({ date_to: v })} placeholder="To" className="w-[138px]" />
       </div>
     </>
   );

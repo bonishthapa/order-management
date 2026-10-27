@@ -1,0 +1,34 @@
+{% load erp %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>{{ doc.number }}</title>
+<style>
+  @page { size: 80mm auto; margin: 4mm 3mm; }
+  body { font-family: "DejaVu Sans", "Noto Sans", sans-serif; font-size: 8pt; color: #000; margin: 0; }
+  .c { text-align: center; } .r { text-align: right; } .b { font-weight: 700; }
+  h1 { font-size: 10pt; margin: 0; } hr { border: none; border-top: 0.6pt dashed #000; margin: 4pt 0; }
+  table { width: 100%; border-collapse: collapse; } td { padding: 1pt 0; vertical-align: top; }
+</style></head>
+<body>
+  <div class="c"><h1>{{ organization.legal_name|default:organization.name }}</h1>
+    <div>{{ organization.address }}{% if organization.city %}, {{ organization.city }}{% endif %}</div>
+    {% if organization.tax_id %}<div>PAN/VAT {{ organization.tax_id }}</div>{% endif %}
+    <div class="b" style="margin-top:3pt">PAYMENT RECEIPT · {{ copy_label }}</div></div>
+  <hr>
+  <table>
+    <tr><td>No.</td><td class="r b">{{ doc.number }}</td></tr>
+    <tr><td>Date</td><td class="r">{% bizdate doc.date %}</td></tr>
+    <tr><td>Customer</td><td class="r">{{ doc.customer.name }}</td></tr>
+    <tr><td>Method</td><td class="r">{{ doc.payment_method.name }}{% if doc.reference %} · {{ doc.reference }}{% endif %}</td></tr>
+  </table>
+  <hr>
+  <table>
+    {% for a in doc.allocations.all %}{% if a.is_active %}<tr><td>{{ a.invoice.number }}</td><td class="r">{% amount a.amount %}</td></tr>{% endif %}{% endfor %}
+    {% if doc.unapplied_amount %}<tr><td>Advance</td><td class="r">{% amount doc.unapplied_amount %}</td></tr>{% endif %}
+  </table>
+  <hr>
+  <table><tr><td class="b">Received</td><td class="r b">{{ organization.currency_symbol }} {% amount doc.amount %}</td></tr></table>
+  <div style="margin-top:2pt">{{ doc.amount|words }}</div>
+  <hr>
+  <div>Received by: {{ doc.received_by.full_name }}</div>
+  <div style="margin-top:14pt">Signature ____________________</div>
+  <div class="c" style="margin-top:6pt">{{ organization.document_footer }}</div>
+</body></html>

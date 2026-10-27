@@ -160,11 +160,13 @@ class SupplierBillLineSerializer(PricedLineSerializer):
     order_line = serializers.PrimaryKeyRelatedField(queryset=PurchaseOrderLine.objects.all(), required=False, allow_null=True)
     receipt_line = serializers.PrimaryKeyRelatedField(queryset=GoodsReceiptLine.objects.all(), required=False, allow_null=True)
     grn_number = serializers.CharField(source="receipt_line.receipt.number", read_only=True, default=None)
+    track_batches = serializers.BooleanField(source="product.track_batches", read_only=True)
+    track_serials = serializers.BooleanField(source="product.track_serials", read_only=True)
 
     class Meta:
         model = SupplierBillLine
         fields = PricedLineSerializer.base_fields + ["order_line", "receipt_line", "grn_number", "returned_quantity",
-                                                     "batch_number", "expiry_date"]
+                                                     "batch_number", "expiry_date", "track_batches", "track_serials"]
         read_only_fields = LINE_READ_ONLY + ["returned_quantity"]
 
 
@@ -279,6 +281,11 @@ class PurchaseReturnSerializer(DocumentSerializer):
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
     warehouse_name = serializers.CharField(source="warehouse.__str__", read_only=True)
     unapplied_credit = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    bill_date = serializers.DateField(source="bill.bill_date", read_only=True)
+    supplier_invoice_number = serializers.CharField(source="bill.supplier_invoice_number", read_only=True)
+    journal_number = serializers.CharField(source="journal.number", read_only=True, default=None)
+    posted_by_name = serializers.CharField(source="posted_by.full_name", read_only=True, default=None)
     lines = PurchaseReturnLineSerializer(many=True)
     line_serializer_class = PurchaseReturnLineSerializer
     line_fk = "purchase_return"
@@ -286,8 +293,9 @@ class PurchaseReturnSerializer(DocumentSerializer):
     class Meta:
         model = PurchaseReturn
         fields = ["id", "number", "fiscal_year", "bill", "bill_number", "supplier", "supplier_name", "warehouse",
-                  "warehouse_name", "date", "reason", "status", *TOTALS, "credit_applied", "refunded_amount",
-                  "unapplied_credit", "lines", "journal", "stock_movement", "posted_at", "created_at"]
+                  "warehouse_name", "date", "reason", "status", "status_label", "bill_date", "supplier_invoice_number",
+                  *TOTALS, "credit_applied", "refunded_amount", "unapplied_credit", "lines", "journal", "journal_number",
+                  "stock_movement", "posted_at", "posted_by_name", "created_at"]
         read_only_fields = ["number", "fiscal_year", "supplier", "status", *TOTALS, "credit_applied", "refunded_amount",
                             "journal", "stock_movement", "posted_at"]
 

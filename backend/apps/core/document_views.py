@@ -11,8 +11,30 @@ from .pdf import pdf_response, render_pdf
 from .viewsets import OrganizationModelViewSet
 
 
-class DocumentViewSet(OrganizationModelViewSet):
+class TimelineMixin:
+    """Adds ``GET /<resource>/:id/timeline/``: audit history plus connected documents."""
+
+    entity_type = None
+
+    @action(detail=True, methods=["get"])
+    def timeline(self, request, pk=None):
+        from apps.audit.models import AuditEvent
+        from apps.audit.serializers import AuditEventSerializer
+
+        from .related import related_documents
+
+        obj = self.get_object()
+        entity = self.entity_type or type(obj).__name__.lower()
+        events = AuditEvent.objects.filter(organization=request.organization, entity_type=entity, entity_id=str(obj.pk))
+        return Response({
+            "events": AuditEventSerializer(events.select_related("user")[:200], many=True).data,
+            "related": related_documents(obj),
+        })
+
+
+class DocumentViewSet(TimelineMixin, OrganizationModelViewSet):
     pdf_template = None
+    compact_pdf_template = None  # optional 80 mm receipt-printer layout (?layout=compact)
     pdf_title = ""
     entity_type = None  # audit entity name used by services (model name in lower case)
 
@@ -36,25 +58,13 @@ class DocumentViewSet(OrganizationModelViewSet):
             copy_label = obj.get_status_display().upper()
         context = {"organization": request.organization, "doc": obj, "title": self.pdf_title, "copy_label": copy_label,
                    **self.pdf_context(obj)}
-        pdf = render_pdf(self.pdf_template, context, request)
+        template = self.pdf_template
+        if request.query_params.get("layout") == "compact" and self.compact_pdf_template:
+            template = self.compact_pdf_template
+        pdf = render_pdf(template, context, request)
         record_event(request, "printed", self.entity_type or model.__name__.lower(), obj, new={"copy": copy_label})
         name = (getattr(obj, "number", "") or f"draft-{obj.pk}").replace("/", "-")
         return pdf_response(pdf, f"{name}.pdf", inline=request.query_params.get("download") != "1")
-
-    @action(detail=True, methods=["get"])
-    def timeline(self, request, pk=None):
-        from apps.audit.models import AuditEvent
-        from apps.audit.serializers import AuditEventSerializer
-
-        from .related import related_documents
-
-        obj = self.get_object()
-        entity = self.entity_type or type(obj).__name__.lower()
-        events = AuditEvent.objects.filter(organization=request.organization, entity_type=entity, entity_id=str(obj.pk))
-        return Response({
-            "events": AuditEventSerializer(events.select_related("user")[:200], many=True).data,
-            "related": related_documents(obj),
-        })
 
     @action(detail=False, methods=["get"])
     def export(self, request):

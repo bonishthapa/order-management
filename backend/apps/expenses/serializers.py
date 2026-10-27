@@ -25,6 +25,8 @@ class ExpenseSerializer(BaseModelSerializer):
     payment_method = OrgRelatedField(PaymentMethod, extra_filter={"is_active": True})
     paid_from_account = OrgRelatedField(Account, extra_filter={"is_group": False, "is_active": True})
     category_name = serializers.CharField(source="category.name", read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True, default=None)
+    fiscal_year_name = serializers.CharField(source="fiscal_year.name", read_only=True, default=None)
     payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
     paid_from_account_name = serializers.CharField(source="paid_from_account.__str__", read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
@@ -35,7 +37,8 @@ class ExpenseSerializer(BaseModelSerializer):
 
     class Meta:
         model = Expense
-        fields = ["id", "number", "fiscal_year", "category", "category_name", "date", "payee", "supplier", "amount",
+        fields = ["id", "number", "fiscal_year", "fiscal_year_name", "category", "category_name", "date", "payee", "supplier",
+                  "supplier_name", "amount",
                   "tax_rate", "tax_percent", "tax_amount", "total", "payment_method", "payment_method_name",
                   "paid_from_account", "paid_from_account_name", "reference", "description", "status", "status_label",
                   "submitted_at", "approved_by_name", "approved_at", "rejection_reason", "reversal_reason", "journal",

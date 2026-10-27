@@ -99,12 +99,28 @@ def require(request, perm):
 
 
 def allowed_warehouse_ids(request):
-    """Return the warehouse ids a member is restricted to, or None for unrestricted."""
+    """Warehouse ids a member is restricted to, or None for unrestricted.
+
+    A membership may name warehouses directly and/or branches (meaning every warehouse of those
+    branches). With neither, the member sees every warehouse of the organisation.
+    """
     membership = getattr(request, "membership", None)
     if membership is None:
         return None
-    ids = list(membership.warehouses.values_list("id", flat=True))
-    return ids or None
+    if hasattr(request, "_allowed_warehouses"):
+        return request._allowed_warehouses
+    from apps.inventory.models import Warehouse
+
+    ids = set(membership.warehouses.values_list("id", flat=True))
+    branch_ids = list(membership.branches.values_list("id", flat=True))
+    if branch_ids:
+        ids |= set(Warehouse.objects.filter(organization=membership.organization, branch_id__in=branch_ids).values_list("id", flat=True))
+    request._allowed_warehouses = sorted(ids) or None
+    if request._allowed_warehouses is not None and (membership.warehouses.exists() or branch_ids):
+        # Goods in transit stay visible to restricted users so they can receive incoming transfers.
+        transit = Warehouse.objects.filter(organization=membership.organization, is_transit=True).values_list("id", flat=True)
+        request._allowed_warehouses = sorted(set(request._allowed_warehouses) | set(transit))
+    return request._allowed_warehouses
 
 
 def check_warehouse_access(request, warehouse):

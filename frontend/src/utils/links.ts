@@ -51,5 +51,5 @@ export const TYPE_LABELS: Record<string, string> = {
   "sales-order": "Sales order", delivery: "Delivery", "sales-invoice": "Invoice", "sales-receipt": "Receipt", "customer-refund": "Refund",
   "sales-return": "Credit note", "purchase-order": "Purchase order", "goods-received-note": "GRN", "purchase-bill": "Supplier bill",
   "payment-voucher": "Payment voucher", "supplier-refund": "Supplier refund", "purchase-return": "Debit note", expense: "Expense",
-  journal: "Journal", "stock-movement": "Stock movement", customer: "Customer", supplier: "Supplier", product: "Product",
+  journal: "Journal", "stock-movement": "Stock movement", "stock-transfer": "Stock transfer", "stock-count": "Stock count", customer: "Customer", supplier: "Supplier", product: "Product",
 };

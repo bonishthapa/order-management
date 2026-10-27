@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 """Global search across master data and documents the user is allowed to see."""
 from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
@@ -22,6 +24,7 @@ TARGETS = [
 ]
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT, tags=["reports"])
 @api_view(["GET"])
 @permission_classes([HasModulePermission])
 def global_search(request):

@@ -1,0 +1,56 @@
+# Production-style stack: PostgreSQL + Django/Gunicorn + Nginx serving the SPA.
+#   cp .env.example .env   # then set real secrets
+#   docker compose up -d --build
+#   docker compose exec backend python manage.py create_organization --name "..." --code ... --admin-email ...
+# Demo data: docker compose exec backend python manage.py seed_demo
+services:
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-erp}
+      POSTGRES_USER: ${POSTGRES_USER:-erp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-erp} -d ${POSTGRES_DB:-erp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_DEBUG: "0"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${PUBLIC_URL:-http://localhost:8080}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${PUBLIC_URL:-http://localhost:8080}
+      DJANGO_SECURE_PROXY_SSL: ${DJANGO_SECURE_PROXY_SSL:-0}
+      DJANGO_HSTS_SECONDS: ${DJANGO_HSTS_SECONDS:-0}
+      REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-0}
+      DATABASE_URL: postgres://${POSTGRES_USER:-erp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-erp}
+      FRONTEND_URL: ${PUBLIC_URL:-http://localhost:8080}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-erp@localhost}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - media:/app/media
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+
+volumes:
+  pgdata:
+  media:

@@ -458,7 +458,7 @@ class Command(BaseCommand):
             return  # stays unpaid
         pay_date = self.clamp(date + dt.timedelta(days=self.rng.randint(0, invoice.customer.payment_terms_days + 15)))
         amount = invoice.balance_due if roll > 0.35 else money(invoice.balance_due * D("0.5"))
-        method, account = (self.cash_method, self.cash) if amount < 50000 else (self.bank_method, self.bank)
+        method, account = (self.cash_method, self.cash) if amount < 15000 else (self.bank_method, self.bank)
         pay.create_receipt(self.org, self.users[Role.ACCOUNTANT], customer=invoice.customer, date=pay_date, amount=amount,
                            payment_method=method, deposit_account=account,
                            reference="" if method == self.cash_method else f"TRF{self.rng.randint(10**6, 10**7)}",
@@ -472,13 +472,13 @@ class Command(BaseCommand):
             self.cursor = day
             weekday = day.weekday()
             if weekday != 5:  # Saturday is the weekly holiday in Nepal
-                if self.rng.random() < 0.55:
+                if self.rng.random() < 0.7:
                     self.sales_cycle(day, self.rng.choice(self.customers), partial=self.rng.random() < 0.1)
                 if self.rng.random() < 0.12:
                     self.sales_cycle(day, self.rng.choice(self.customers), warehouse=self.rng.choice([self.warehouses["PKR"], self.warehouses["BRT"]]))
                 if weekday == 0:
                     self.restock(day)
-                if self.rng.random() < 0.2:
+                if self.rng.random() < 0.15:
                     self.expense(day)
             if day.day == 3:
                 self.transfer(day)
@@ -501,7 +501,7 @@ class Command(BaseCommand):
 
     def expense(self, day):
         category = self.rng.choice(self.expense_categories)
-        amount = D(self.rng.randrange(1500, 85000, 50))
+        amount = D(self.rng.randrange(1500, 30000, 50))
         account, method = (self.cash, self.cash_method) if amount < 20000 else (self.bank, self.bank_method)
         e = Expense.objects.create(organization=self.org, category=category, date=day, payee=self.rng.choice(
             ["Nepal Electricity Authority", "Nepal Telecom", "Office landlord", "Staff payroll", "Local transporter", "Stationery shop"]),

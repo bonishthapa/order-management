@@ -13,13 +13,19 @@ class AccountSerializer(BaseModelSerializer):
     balance = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True, default=None)
     type_label = serializers.CharField(source="get_account_type_display", read_only=True)
     system_label = serializers.CharField(source="get_system_key_display", read_only=True)
+    has_postings = serializers.SerializerMethodField()
 
     class Meta:
         model = Account
         fields = ["id", "code", "name", "account_type", "type_label", "parent", "parent_name", "system_key", "system_label",
                   "is_group", "is_cash", "is_bank", "bank_name", "bank_account_number", "bank_branch", "description",
-                  "is_active", "balance"]
+                  "is_active", "balance", "has_postings"]
         read_only_fields = ["system_key"]
+
+    def get_has_postings(self, obj):
+        """Whether any journal line uses the account (annotated on lists; queried for single records)."""
+        annotated = getattr(obj, "has_postings", None)
+        return annotated if annotated is not None else obj.lines.exists()
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

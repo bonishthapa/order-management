@@ -32,7 +32,7 @@ export function formatAmount(value: string | number | null | undefined, places =
   let [integer, fraction = ""] = text.split(".");
   if (fraction.length > places) {
     const fixed = Number(`${integer}.${fraction}`).toFixed(places);
-    [integer, fraction] = fixed.split(".");
+    [integer, fraction = ""] = fixed.split(".");
   }
   fraction = fraction.padEnd(places, "0");
   const grouped = groupDigits(integer.replace(/^0+(?=\d)/, ""), groupingStyle);

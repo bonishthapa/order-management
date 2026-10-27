@@ -176,3 +176,30 @@ def test_attachment_upload_validation(fiscal_year, org, api, users, cash, cash_m
     assert r.status_code == 201
     r = client_for(users["WAREHOUSE"], org).get("/api/v1/attachments/", {"entity_type": "expense", "entity_id": expense.pk})
     assert r.status_code == 403
+
+
+def test_branch_restriction_limits_warehouses(fiscal_year, org, users, warehouse, warehouse2):
+    from apps.organizations.models import Branch
+    from apps.users.models import Membership
+
+    branch = Branch.objects.create(organization=org, code="PKR", name="Pokhara")
+    warehouse2.branch = branch
+    warehouse2.save()
+    Membership.objects.get(user=users["WAREHOUSE"]).branches.set([branch])
+    c = client_for(users["WAREHOUSE"], org)
+    r = c.post("/api/v1/stock-movements/", {"movement_type": "ADJUSTMENT", "date": DAY.isoformat(), "warehouse": warehouse.pk,
+                                            "reason": "x", "lines": [{"product": 1, "quantity": "1"}]}, format="json")
+    assert r.status_code in (400, 403)
+    from apps.inventory.models import StockMovement
+
+    StockMovement.objects.create(organization=org, movement_type="ADJUSTMENT", date=DAY, warehouse=warehouse, reason="hidden")
+    visible = StockMovement.objects.create(organization=org, movement_type="ADJUSTMENT", date=DAY, warehouse=warehouse2, reason="mine")
+    ids = [m["id"] for m in c.get("/api/v1/stock-movements/").json()["results"]]
+    assert ids == [visible.pk]
+
+
+def test_compact_receipt_pdf(fiscal_year, org, api, customer, cash, cash_method):
+    r = api.post("/api/v1/sales-receipts/", {"customer": customer.pk, "date": DAY.isoformat(), "amount": "500",
+                                             "payment_method": cash_method.pk, "deposit_account": cash.pk}, format="json")
+    pdf = api.get(f"/api/v1/sales-receipts/{r.json()['id']}/pdf/", {"layout": "compact"})
+    assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"

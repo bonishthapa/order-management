@@ -45,7 +45,14 @@ export function ConfirmDialog({ open, onOpenChange, title, description, confirmL
       footer={<>
         <Button onClick={() => onOpenChange(false)}>Cancel</Button>
         <Button variant={tone === "danger" ? "danger" : "primary"} loading={loading} disabled={requireReason && !reason.trim()}
-          onClick={async () => { await onConfirm(reason.trim()); setReason(""); }}>{confirmLabel}</Button>
+          onClick={async () => {
+            try {
+              await onConfirm(reason.trim());
+              setReason("");
+            } catch {
+              // The action reports its own error (toast); keep the dialog open so the user can retry or cancel.
+            }
+          }}>{confirmLabel}</Button>
       </>}>
       {description && <div className="text-[13px] text-slate-600">{description}</div>}
       {requireReason && (

@@ -19,9 +19,11 @@ class ProductCategorySerializer(BaseModelSerializer):
 
 
 class BrandSerializer(BaseModelSerializer):
+    product_count = serializers.IntegerField(read_only=True, default=None)
+
     class Meta:
         model = Brand
-        fields = ["id", "name", "is_active"]
+        fields = ["id", "name", "is_active", "product_count"]
 
 
 class PriceTierSerializer(serializers.ModelSerializer):

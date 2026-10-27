@@ -31,7 +31,7 @@ def _stock_sum(field, warehouse_ids=None):
 
 
 class ProductCategoryViewSet(OrganizationModelViewSet):
-    queryset = ProductCategory.objects.annotate(product_count=Count("products"))
+    queryset = ProductCategory.objects.annotate(product_count=Count("products")).order_by("name")
     serializer_class = ProductCategorySerializer
     permission_module = "products"
     permission_map = {"list": None, "retrieve": None}
@@ -44,7 +44,7 @@ class ProductCategoryViewSet(OrganizationModelViewSet):
 
 
 class BrandViewSet(ProductCategoryViewSet):
-    queryset = Brand.objects.all()
+    queryset = Brand.objects.annotate(product_count=Count("products")).order_by("name")
     serializer_class = BrandSerializer
     audit_entity = "brand"
 
@@ -60,7 +60,7 @@ class ProductViewSet(OrganizationModelViewSet):
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     search_fields = ["sku", "name", "barcode", "description"]
     filterset_fields = {"is_active": ["exact"], "category": ["exact"], "brand": ["exact"], "product_type": ["exact"],
-                        "track_batches": ["exact"], "track_serials": ["exact"]}
+                        "track_batches": ["exact"], "track_serials": ["exact"], "variant_of": ["exact", "isnull"]}
     ordering_fields = ["sku", "name", "selling_price", "purchase_price", "on_hand", "stock_value", "reorder_level", "created_at"]
     ordering = ["name"]
 

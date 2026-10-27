@@ -152,7 +152,7 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "apps.core.exceptions.exception_handler",
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.UserRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {
-        "user": env("THROTTLE_USER", "2000/hour"),
+        "user": env("THROTTLE_USER", "10000/hour"),
         "auth": env("THROTTLE_AUTH", "20/minute"),
         "password_reset": env("THROTTLE_PASSWORD_RESET", "5/hour"),
     },

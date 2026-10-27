@@ -1,6 +1,6 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { Controller, useForm, useWatch, type Control, type UseFormRegister } from "react-hook-form";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, errorMessage, fieldErrors } from "@/api/client";
@@ -73,14 +73,16 @@ export function TradeDocumentForm(props: TradeDocumentFormProps) {
   const { resource, detailPath, party, dateField, dateLabel, secondaryDate, referenceField, warehouse, priceMode, showTerms = true,
     showCharges = true, initial, extraFields, toPayload } = props;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { session } = useAuth();
+  const presetParty = searchParams.get(party.field);
   const taxes = useOptions<TaxRate>("tax-rates");
   const today = todayIn(session?.organization?.timezone);
   const defaultTax = taxes.data?.find((t) => t.is_default)?.id ?? null;
   const form = useForm<TradeFormValues>({
     defaultValues: initial ? fromDocument(initial, props) : {
-      party: null, warehouse: null, date: today, secondary_date: "", reference: "", freight: "0", other_charges: "0", notes: "", terms: "",
+      party: presetParty ? Number(presetParty) : null, warehouse: null, date: today, secondary_date: "", reference: "", freight: "0", other_charges: "0", notes: "", terms: "",
       extra: {}, lines: [emptyLine()],
     },
   });

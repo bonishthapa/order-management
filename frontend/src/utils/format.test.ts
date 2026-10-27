@@ -8,6 +8,7 @@ describe("formatting", () => {
     expect(formatAmount("12345678.5")).toBe("1,23,45,678.50");
     expect(formatAmount("-1200")).toBe("−1,200.00");
     expect(formatAmount("0.00")).toBe("0.00");
+    expect(formatAmount("123456.78", 0)).toBe("1,23,457");
   });
   it("formats quantities without trailing zeros", () => {
     expect(formatQty("10.000")).toBe("10");

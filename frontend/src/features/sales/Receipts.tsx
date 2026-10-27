@@ -220,7 +220,7 @@ export function ReceiptDetail() {
               description="Use this for a bounced cheque or a receipt recorded in error. Invoice allocations are released and the customer's balance restored."
               onReverse={(reason) => action.mutateAsync({ action: "reverse", body: { reason }, success: "Receipt reversed" })} />
           )}
-          <PrintButton url={`/sales-receipts/${r.id}/pdf/`} filename={r.number} label="Print receipt" />
+          <PrintButton url={`/sales-receipts/${r.id}/pdf/`} filename={r.number} label="Print receipt" compact />
         </>} />
       {r.status === "REVERSED" && <Alert tone="warning" className="mb-4" title="Reversed">{r.reversal_reason}</Alert>}
       <div className="space-y-4">

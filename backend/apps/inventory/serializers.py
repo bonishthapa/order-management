@@ -149,15 +149,21 @@ class StockMovementSerializer(DocumentSerializer):
     created_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None)
     journal_number = serializers.CharField(source="journal.number", read_only=True, default=None)
     total_value = serializers.SerializerMethodField()
+    reversal_of_number = serializers.CharField(source="reversal_of.number", read_only=True, default=None)
+    reversed_by = serializers.SerializerMethodField()
 
     class Meta:
         model = StockMovement
         fields = ["id", "number", "movement_type", "movement_type_label", "date", "warehouse", "warehouse_name", "reason",
                   "reference_type", "reference_id", "reference_number", "status", "posted_by_name", "posted_at",
-                  "created_by_name", "journal", "journal_number", "reversal_of", "notes", "lines", "total_value",
-                  "created_at"]
+                  "created_by_name", "journal", "journal_number", "reversal_of", "reversal_of_number", "reversed_by", "notes",
+                  "lines", "total_value", "created_at"]
         read_only_fields = ["number", "reference_type", "reference_id", "reference_number", "status", "posted_at",
                             "journal", "reversal_of"]
+
+    def get_reversed_by(self, obj):
+        reversal = StockMovement.objects.filter(reversal_of=obj).only("id", "number").first()
+        return {"id": reversal.pk, "number": reversal.number} if reversal else None
 
     def get_total_value(self, obj):
         from django.db.models import Sum

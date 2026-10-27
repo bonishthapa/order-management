@@ -9,6 +9,7 @@ from apps.calendar_utils.fields import parse_date_input
 from apps.core.export import export_response
 from apps.core.permissions import HasModulePermission, allowed_warehouse_ids, check_warehouse_access
 from apps.core.serializers import ReasonSerializer
+from apps.core.document_views import TimelineMixin
 from apps.core.viewsets import OrganizationModelViewSet, OrganizationReadOnlyViewSet
 
 from . import services
@@ -95,6 +96,16 @@ class StockBalanceViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return qs
 
     @action(detail=False, methods=["get"])
+    def summary(self, request):
+        """Totals for the filtered balances (same filters as the list)."""
+        qs = self.filter_queryset(self.get_queryset())
+        totals = qs.aggregate(total_value=Sum("value"), rows=Count("id"), products=Count("product", distinct=True),
+                              warehouses=Count("warehouse", distinct=True))
+        low = qs.filter(product__reorder_level__gt=0, on_hand__lte=F("product__reorder_level")).count()
+        return Response({"total_value": totals["total_value"] or 0, "rows": totals["rows"], "products": totals["products"],
+                         "warehouses": totals["warehouses"], "low_stock_rows": low})
+
+    @action(detail=False, methods=["get"])
     def export(self, request):
         columns = [("product.sku", "SKU", "text"), ("product.name", "Product", "text"), ("warehouse.code", "Warehouse", "text"),
                    ("on_hand", "On hand", "qty"), ("reserved", "Reserved", "qty"), ("available", "Available", "qty"),
@@ -129,7 +140,8 @@ class StockLedgerViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                                request.query_params.get("export", "csv"))
 
 
-class StockMovementViewSet(OrganizationModelViewSet):
+class StockMovementViewSet(TimelineMixin, OrganizationModelViewSet):
+    entity_type = "stock_movement"
     queryset = StockMovement.objects.select_related("warehouse", "posted_by", "created_by", "journal").prefetch_related(
         "lines__product")
     serializer_class = StockMovementSerializer
@@ -139,7 +151,8 @@ class StockMovementViewSet(OrganizationModelViewSet):
     audit_entity = "stock_movement"
     date_field = "date"
     search_fields = ["number", "reason", "reference_number"]
-    filterset_fields = {"status": ["exact"], "movement_type": ["exact", "in"], "warehouse": ["exact"]}
+    filterset_fields = {"status": ["exact"], "movement_type": ["exact", "in"], "warehouse": ["exact"],
+                        "reference_type": ["exact"], "reference_id": ["exact"]}
     ordering_fields = ["date", "number", "created_at"]
     ordering = ["-date", "-id"]
 
@@ -162,7 +175,8 @@ class StockMovementViewSet(OrganizationModelViewSet):
         return Response(self.get_serializer(self.get_queryset().get(pk=reversal.pk)).data)
 
 
-class StockTransferViewSet(OrganizationModelViewSet):
+class StockTransferViewSet(TimelineMixin, OrganizationModelViewSet):
+    entity_type = "stock_transfer"
     queryset = StockTransfer.objects.select_related("source_warehouse", "destination_warehouse", "dispatched_by",
                                                     "received_by").prefetch_related("lines__product")
     serializer_class = StockTransferSerializer
@@ -216,7 +230,8 @@ class StockTransferViewSet(OrganizationModelViewSet):
         return Response(self.get_serializer(transfer).data)
 
 
-class StockCountViewSet(OrganizationModelViewSet):
+class StockCountViewSet(TimelineMixin, OrganizationModelViewSet):
+    entity_type = "stock_count"
     queryset = StockCount.objects.select_related("warehouse", "posted_by").prefetch_related("lines__product__unit")
     serializer_class = StockCountSerializer
     permission_module = "inventory"

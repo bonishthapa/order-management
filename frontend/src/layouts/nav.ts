@@ -45,6 +45,7 @@ export const NAV: NavGroup[] = [
       { label: "Categories", to: "/inventory/categories", icon: Tags, perm: "products.view" },
       { label: "Warehouses", to: "/inventory/warehouses", icon: Warehouse, perm: "inventory.view" },
       { label: "Stock Movements", to: "/inventory/movements", icon: FileOutput, perm: "inventory.view" },
+      { label: "Stock Ledger", to: "/inventory/ledger", icon: FileSpreadsheet, perm: "inventory.view" },
       { label: "Transfers", to: "/inventory/transfers", icon: ArrowLeftRight, perm: "inventory.view" },
       { label: "Stock Counts", to: "/inventory/counts", icon: ClipboardCheck, perm: "inventory.view" },
     ],

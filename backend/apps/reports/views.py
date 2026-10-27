@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 import datetime as dt
 from decimal import Decimal
 
@@ -20,6 +22,7 @@ from .definitions import Ctx
 from .registry import REPORTS
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT, tags=["reports"])
 @api_view(["GET"])
 @permission_classes([HasModulePermission])
 def report_index(request):
@@ -68,6 +71,7 @@ def run_report(request, slug):
     return definition, data
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT, tags=["reports"])
 @api_view(["GET"])
 @permission_classes([HasModulePermission])
 def report_detail(request, slug):
@@ -91,6 +95,7 @@ def report_detail(request, slug):
     return Response(_jsonable(data))
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT, tags=["reports"])
 @api_view(["GET"])
 @permission_classes([HasModulePermission])
 def dashboard(request):

@@ -1,5 +1,6 @@
 import datetime as dt
 
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
@@ -9,7 +10,7 @@ from rest_framework.response import Response
 from .bs import BSDateError, ad_to_bs, bs_month_bounds, bs_year_range, days_in_bs_month, month_names, parse_bs, supported_range
 
 
-@extend_schema(parameters=[OpenApiParameter("ad", str), OpenApiParameter("bs", str)], tags=["calendar"])
+@extend_schema(parameters=[OpenApiParameter("ad", str), OpenApiParameter("bs", str)], tags=["calendar"], responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def convert(request):
@@ -29,7 +30,7 @@ def convert(request):
     return Response({"ad": ad.isoformat(), "bs": bs.isoformat(), "bs_month_name": bs.month_name, "weekday": ad.strftime("%A")})
 
 
-@extend_schema(tags=["calendar"])
+@extend_schema(tags=["calendar"], responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def meta(request):
@@ -41,7 +42,7 @@ def meta(request):
     })
 
 
-@extend_schema(parameters=[OpenApiParameter("year", int), OpenApiParameter("month", int)], tags=["calendar"])
+@extend_schema(parameters=[OpenApiParameter("year", int), OpenApiParameter("month", int)], tags=["calendar"], responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def bs_month(request):

@@ -147,9 +147,18 @@ class SupplierRefundSerializer(BaseModelSerializer):
     payment_method = OrgRelatedField(PaymentMethod, extra_filter={"is_active": True})
     deposit_account = OrgRelatedField(Account, extra_filter=CASH_BANK)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
+    deposit_account_name = serializers.CharField(source="deposit_account.__str__", read_only=True)
+    source_number = serializers.SerializerMethodField()
+    journal_number = serializers.CharField(source="journal.number", read_only=True, default=None)
 
     class Meta:
         model = SupplierRefund
-        fields = ["id", "number", "supplier", "supplier_name", "date", "amount", "voucher", "debit_note", "payment_method",
-                  "deposit_account", "reference", "notes", "status", "journal", "created_at"]
+        fields = ["id", "number", "supplier", "supplier_name", "date", "amount", "voucher", "debit_note", "source_number",
+                  "payment_method", "payment_method_name", "deposit_account", "deposit_account_name", "reference", "notes",
+                  "status", "journal", "journal_number", "created_at"]
         read_only_fields = ["number", "status", "journal"]
+
+    def get_source_number(self, obj):
+        source = obj.voucher or obj.debit_note
+        return source.number if source else None

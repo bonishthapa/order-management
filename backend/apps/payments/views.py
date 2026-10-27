@@ -34,6 +34,7 @@ class CustomerReceiptViewSet(DocumentViewSet):
     audit_entity = None
     entity_type = "customerreceipt"
     pdf_template = "documents/receipt.html"
+    compact_pdf_template = "documents/receipt_compact.html"
     pdf_title = "Payment Receipt"
     date_field = "date"
     search_fields = ["number", "customer__name", "reference"]

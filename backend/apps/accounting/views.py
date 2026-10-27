@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Count, DecimalField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Count, DecimalField, Exists, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
@@ -55,7 +55,7 @@ class AccountViewSet(OrganizationModelViewSet):
     ordering = ["code"]
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().annotate(has_postings=Exists(JournalLine.objects.filter(account=OuterRef("pk"))))
         if "accounting.view" in self.request.perms or "reports.financial" in self.request.perms:
             as_of = parse_date_input(self.request.query_params.get("as_of"), self.request.query_params.get("as_of_bs"), "as_of")
             qs = qs.annotate(balance=_balance_annotation(as_of))

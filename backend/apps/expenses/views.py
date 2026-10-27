@@ -23,7 +23,7 @@ class ExpenseCategoryViewSet(OrganizationModelViewSet):
 
 
 class ExpenseViewSet(DocumentViewSet):
-    queryset = Expense.objects.select_related("category", "payment_method", "paid_from_account", "created_by",
+    queryset = Expense.objects.select_related("category", "supplier", "fiscal_year", "payment_method", "paid_from_account", "created_by",
                                               "approved_by", "journal")
     serializer_class = ExpenseSerializer
     permission_module = "expenses"
@@ -40,13 +40,14 @@ class ExpenseViewSet(DocumentViewSet):
     ordering = ["-date", "-id"]
 
     def get_queryset(self):
-        from django.db.models import Count, OuterRef, Subquery
+        from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
+        from django.db.models.functions import Coalesce
 
         from apps.core.models import Attachment
 
         attachments = Attachment.objects.filter(entity_type="expense", entity_id=OuterRef("pk")).values("entity_id") \
             .annotate(c=Count("id")).values("c")
-        return super().get_queryset().annotate(attachment_count=Subquery(attachments))
+        return super().get_queryset().annotate(attachment_count=Coalesce(Subquery(attachments, output_field=IntegerField()), Value(0)))
 
     @extend_schema(request=None)
     @action(detail=True, methods=["post"])

@@ -29,11 +29,11 @@ export const col = {
     valueFormatter: (p: ValueFormatterParams) => formatPercent(p.value), ...extra,
   }),
   date: (field: string, headerName: string, ctx: ColumnContext, extra: Partial<ColDef> = {}): ColDef => ({
-    field, headerName, minWidth: ctx.dateMode === "AD_BS" ? 190 : 110, cellClass: "num-cell",
+    field, headerName, width: ctx.dateMode === "AD_BS" ? 200 : 116, minWidth: ctx.dateMode === "AD_BS" ? 200 : 116, flex: 0, cellClass: "num-cell",
     valueFormatter: (p: ValueFormatterParams) => formatDate(p.value, ctx.dateMode, p.data?.[`${field}_bs`]), ...extra,
   }),
   status: (field: string, headerName = "Status", labelField?: string, extra: Partial<ColDef> = {}): ColDef => ({
-    field, headerName, minWidth: 120, maxWidth: 170,
+    field, headerName, minWidth: 120, maxWidth: 170, cellClass: "flex items-center",
     cellRenderer: (p: ICellRendererParams<Row>) => <StatusBadge status={p.value} label={labelField ? p.data?.[labelField] : undefined} />,
     ...extra,
   }),

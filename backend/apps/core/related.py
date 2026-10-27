@@ -98,7 +98,7 @@ def _bill(bill, include_order=True):
 def related_documents(obj):
     from apps.accounting.models import JournalEntry
     from apps.expenses.models import Expense
-    from apps.inventory.models import StockMovement
+    from apps.inventory.models import StockCount, StockMovement, StockTransfer
     from apps.payments.models import CustomerReceipt, PaymentVoucher
     from apps.purchases.models import GoodsReceipt, PurchaseOrder, PurchaseReturn, SupplierBill
     from apps.sales.models import Delivery, SalesInvoice, SalesOrder, SalesReturn
@@ -142,6 +142,15 @@ def related_documents(obj):
         reversed_by = JournalEntry.objects.filter(reversal_of=obj).first()
         if reversed_by:
             out.append(_journal(reversed_by, "Reversed by"))
+    elif isinstance(obj, StockTransfer):
+        out = [_doc("stock-transfer", obj, date=obj.date, label=f"{obj.source_warehouse.code} → {obj.destination_warehouse.code}",
+                    relation="Transfer")]
+        for m in StockMovement.objects.filter(organization=obj.organization, reference_type="stock_transfer", reference_id=obj.pk):
+            out.append(_movement(m, f"{m.get_movement_type_display()} · {m.warehouse.code}"))
+    elif isinstance(obj, StockCount):
+        out = [_doc("stock-count", obj, date=obj.date, relation="Count"), _movement(obj.adjustment_movement, "Adjustment")]
+        if obj.adjustment_movement_id:
+            out.append(_journal(obj.adjustment_movement.journal, "Journal"))
     elif isinstance(obj, StockMovement):
         out = [_movement(obj, "Movement"), _journal(obj.journal, "Journal")]
     # Drop empties and duplicates while keeping order.
