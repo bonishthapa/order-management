@@ -8,6 +8,7 @@ import { useOptions } from "@/api/hooks";
 import { DatePicker } from "@/calendar/DatePicker";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { EntitySelect } from "@/components/forms/EntitySelect";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Feedback";
@@ -87,6 +88,7 @@ export function TradeDocumentForm(props: TradeDocumentFormProps) {
     },
   });
   const { control, register, handleSubmit, setValue, setError, formState } = form;
+  useUnsavedChangesWarning(formState.isDirty && !formState.isSubmitSuccessful);
   useEffect(() => {
     if (!initial && defaultTax) form.getValues("lines").forEach((l, i) => l.tax_rate === null && !l.product && setValue(`lines.${i}.tax_rate`, defaultTax));
   }, [defaultTax]); // apply the default tax to blank lines once rates load
