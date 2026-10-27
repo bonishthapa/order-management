@@ -1,15 +1,14 @@
 import { HandCoins, Pencil, Plus, Send, Trash2, Undo2 } from "lucide-react";
+import { BaseTable, col, ResourceList } from "@/components/table";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { FormDialog, FormField, FormGrid, useWatch } from "@/components/form";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction, useGet } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
-import { DatePicker } from "@/calendar/DatePicker";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { Attachments } from "@/components/document/Attachments";
 import { DocumentLines, DocumentTotals } from "@/components/document/DocumentLines";
 import { PrintButton } from "@/components/document/PrintButton";
@@ -18,13 +17,10 @@ import { DocumentTimeline } from "@/components/document/Timeline";
 import { TradeDocumentForm } from "@/components/document/TradeDocumentForm";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
-import { formatAmount, formatQty } from "@/utils/format";
+import { formatAmount } from "@/utils/format";
 import { linkFor } from "@/utils/links";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -45,12 +41,12 @@ export function InvoiceList() {
           { type: "entity", name: "customer", label: "Customer", resource: "customers" },
           { type: "boolean", name: "overdue", label: "Overdue only" },
         ]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Invoice", { sortable: true }),
-          col.date("invoice_date", "Date", ctx, { sortable: true }),
+          col.date("invoice_date", "Date", { sortable: true }),
           col.text("customer_display", "Customer", { flex: 2 }),
           col.text("order_number", "Order"),
-          col.date("due_date", "Due", ctx, { sortable: true }),
+          col.date("due_date", "Due", { sortable: true }),
           col.status("status", "Status", "status_label"),
           col.status("payment_status", "Payment", "payment_status_label"),
           col.money("grand_total", "Total", { sortable: true }),
@@ -87,31 +83,29 @@ export function InvoiceForm() {
 }
 
 function OrderInvoiceEditDialog({ invoice, onClose }: { invoice: any; onClose: () => void }) {
-  const [date, setDate] = useState(invoice.invoice_date);
-  const [due, setDue] = useState(invoice.due_date);
-  const [notes, setNotes] = useState(invoice.notes);
-  const [reference, setReference] = useState(invoice.customer_reference);
   const queryClient = useQueryClient();
-  const [saving, setSaving] = useState(false);
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="Edit draft invoice" description="Lines come from the sales order and cannot be changed here."
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={async () => {
-        setSaving(true);
-        try {
-          await api.patch(`/sales-invoices/${invoice.id}/`, { invoice_date: date, due_date: due, notes, customer_reference: reference });
-          await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
-          toast.success("Saved");
-          onClose();
-        } catch (e) { toast.error(errorMessage(e)); } finally { setSaving(false); }
-      }}>Save</Button></>}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Invoice date"><DatePicker value={date} onChange={setDate} /></Field>
-        <Field label="Due date"><DatePicker value={due} onChange={setDue} min={date} /></Field>
-        <Field label="Customer reference" className="sm:col-span-2"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>
-        <Field label="Notes" className="sm:col-span-2"><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-      </div>
-    </Dialog>
+    <FormDialog open onOpenChange={(o) => !o && onClose()} title="Edit draft invoice"
+      description="Lines come from the sales order and cannot be changed here."
+      defaultValues={{ invoice_date: invoice.invoice_date, due_date: invoice.due_date, notes: invoice.notes, customer_reference: invoice.customer_reference }}
+      onSubmit={async (values) => {
+        await api.patch(`/sales-invoices/${invoice.id}/`, values);
+        await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
+        toast.success("Saved");
+      }}>
+      <FormGrid>
+        <FormField name="invoice_date" label="Invoice date" type="date" required />
+        <DueDate />
+        <FormField name="customer_reference" label="Customer reference" span={2} />
+        <FormField name="notes" label="Notes" type="textarea" span={2} />
+      </FormGrid>
+    </FormDialog>
   );
+}
+
+function DueDate() {
+  const invoiceDate = useWatch({ name: "invoice_date" });
+  return <FormField name="due_date" label="Due date" type="date" required min={invoiceDate} />;
 }
 
 export function InvoiceDetail() {
@@ -175,7 +169,7 @@ export function InvoiceDetail() {
             ]} />
           </Panel>
           <Panel title="Items">
-            <DocumentLines lines={inv.lines} extra={inv.status === "POSTED" ? [{ key: "returned_quantity", label: "Returned", align: "right", render: (l) => formatQty(l.returned_quantity) }] : []} />
+            <DocumentLines lines={inv.lines} extra={inv.status === "POSTED" ? [col.qty("returned_quantity", "Returned")] : []} />
             <div className="flex flex-col border-t border-line md:flex-row">
               <div className="flex-1 space-y-3 p-4 text-[13px] text-slate-600">
                 {inv.notes && <div><div className="kv-label mb-1">Notes</div><p className="whitespace-pre-line">{inv.notes}</p></div>}
@@ -195,24 +189,15 @@ export function InvoiceDetail() {
         </TabPanel>
         <TabPanel value="payments">
           <Panel title="Receipts and credits applied">
-            {!allocations.data?.length ? <p className="p-4 text-xs text-slate-500">Nothing applied yet.</p> : (
-              <table className="w-full text-[13px]">
-                <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                  <tr><th className="px-4 py-2">Date</th><th className="px-4 py-2">Document</th><th className="px-4 py-2">Type</th><th className="px-4 py-2 text-right">Amount</th><th className="px-4 py-2">State</th></tr>
-                </thead>
-                <tbody>
-                  {allocations.data.map((a) => (
-                    <tr key={a.id} className="border-b border-line">
-                      <td className="px-4 py-2"><DateText value={a.date} /></td>
-                      <td className="px-4 py-2"><Link className="link" to={linkFor(a.source_type === "receipt" ? "sales-receipt" : "sales-return", a.source_id)!}>{a.source_number}</Link></td>
-                      <td className="px-4 py-2">{a.source_type === "receipt" ? "Receipt" : "Credit note"}</td>
-                      <td className="num px-4 py-2">{formatAmount(a.amount)}</td>
-                      <td className="px-4 py-2">{a.is_active ? <Badge tone="green">Applied</Badge> : <Badge>Reversed</Badge>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            <BaseTable rows={allocations.data} loading={allocations.isLoading} empty={<p className="p-4 text-xs text-slate-500">Nothing applied yet.</p>}
+              columns={[
+                col.date("date", "Date"),
+                col.custom("source_number", "Document", (a: any) => (
+                  <Link className="link" to={linkFor(a.source_type === "receipt" ? "sales-receipt" : "sales-return", a.source_id)!}>{a.source_number}</Link>)),
+                col.custom("source_type", "Type", (a: any) => (a.source_type === "receipt" ? "Receipt" : "Credit note")),
+                col.money("amount", "Amount"),
+                col.custom("is_active", "State", (a: any) => (a.is_active ? <Badge tone="green">Applied</Badge> : <Badge>Reversed</Badge>)),
+              ]} />
           </Panel>
         </TabPanel>
         <TabPanel value="activity"><DocumentTimeline resource="sales-invoices" id={inv.id} /></TabPanel>

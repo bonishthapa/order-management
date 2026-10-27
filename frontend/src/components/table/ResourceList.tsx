@@ -1,19 +1,17 @@
-import type { ColDef } from "ag-grid-community";
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useList } from "@/api/hooks";
 import { useFiscalYear } from "@/app/FiscalYearContext";
-import { useAuth } from "@/auth/AuthContext";
 import { useUrlState } from "@/hooks/useUrlState";
-import { DataTable } from "./DataTable";
+import { DataGrid } from "./DataGrid";
 import { ExportMenu } from "./ExportMenu";
 import { FilterBar, FilterControls, PeriodFilter, SearchBox, type FilterDef } from "./Filters";
-import type { ColumnContext } from "./columns";
+import type { TableColumn } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface ResourceListProps {
   resource: string;
-  columns: (ctx: ColumnContext) => ColDef[];
+  columns: TableColumn[];
   filters?: FilterDef[];
   dated?: boolean; // offers fiscal-year and AD/BS date range filters
   searchPlaceholder?: string;
@@ -32,7 +30,6 @@ export interface ResourceListProps {
 export function ResourceList({ resource, columns, filters = [], dated, searchPlaceholder, detailPath, onRowClick, defaultOrdering = "", exportUrl,
   exportName, extraParams = {}, toolbar, empty, gridId }: ResourceListProps) {
   const navigate = useNavigate();
-  const { dateMode } = useAuth();
   const { selected } = useFiscalYear();
   const [values, set] = useUrlState();
   const fiscalYear = dated ? (values.fiscal_year ?? (selected ? String(selected.id) : "")) : undefined;
@@ -45,7 +42,6 @@ export function ResourceList({ resource, columns, filters = [], dated, searchPla
     ordering: values.ordering ?? defaultOrdering,
   };
   const query = useList<any>(resource, params);
-  const colDefs = useMemo(() => columns({ dateMode }), [columns, dateMode]);
   const filterKeys = ["search", "date_from", "date_to", ...filters.map((f) => f.name)];
   const active = filterKeys.some((k) => values[k]) || values.fiscal_year !== undefined;
   const { page: _p, page_size: _s, ...exportParams } = params;
@@ -61,9 +57,9 @@ export function ResourceList({ resource, columns, filters = [], dated, searchPla
           {exportUrl && <ExportMenu url={exportUrl} params={exportParams} filename={exportName ?? resource} />}
         </div>
       </FilterBar>
-      <DataTable
+      <DataGrid
         id={gridId ?? resource}
-        columns={colDefs}
+        columns={columns}
         rows={query.data?.results}
         total={query.data?.count}
         page={Number(params.page)}

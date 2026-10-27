@@ -1,16 +1,14 @@
-import type { CellClassParams, ICellRendererParams } from "ag-grid-community";
 import { FileOutput } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useGet } from "@/api/hooks";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
+import { ResourceList, col } from "@/components/table";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Feedback";
 import { PageHeader } from "@/components/ui/Page";
 import { useUrlState } from "@/hooks/useUrlState";
-import { formatAmount, toNumber } from "@/utils/format";
-import { MOVEMENT_TYPES, referenceLink } from "./Movements";
+import { formatAmount, formatQty, toNumber } from "@/utils/format";
+import { MOVEMENT_TYPES, rateColumn, referenceLink } from "./Movements";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface StockSummary { total_value: string | number; rows: number; products: number; warehouses: number; low_stock_rows: number }
@@ -56,20 +54,21 @@ export function StockOnHandPage() {
           { type: "boolean", name: "low_stock", label: "At or below reorder level" },
           { type: "boolean", name: "include_zero", label: "Include zero stock" },
         ]}
-        columns={() => [
-          col.text("sku", "SKU", { sortable: true, sortField: "product__sku", pinned: "left", minWidth: 130 } as any),
-          col.text("product_name", "Product", { sortable: true, sortField: "product__name", flex: 2, minWidth: 220 } as any),
+        columns={[
+          col.text("sku", "SKU", { sortable: true, sortField: "product__sku", pinned: true, minWidth: 130 }),
+          col.text("product_name", "Product", { sortable: true, sortField: "product__name", flex: 2, minWidth: 220 }),
           col.text("category", "Category"),
-          col.text("warehouse_code", "Warehouse", { sortable: true, sortField: "warehouse__code", maxWidth: 130, tooltipField: "warehouse_name" } as any),
-          col.text("unit", "Unit", { maxWidth: 80 }),
-          col.qty("on_hand", "On hand", {
-            sortable: true,
-            cellClassRules: { "text-red-700 font-medium": (p: CellClassParams) => !!p.data && toNumber(p.data.reorder_level) > 0 && toNumber(p.data.on_hand) <= toNumber(p.data.reorder_level) },
-          }),
+          col.custom("warehouse_code", "Warehouse", (r: any) => <span title={r.warehouse_name}>{r.warehouse_code}</span>,
+            { sortable: true, sortField: "warehouse__code", minWidth: 110 }),
+          col.text("unit", "Unit", { width: 80 }),
+          col.custom("on_hand", "On hand", (r: any) => {
+            const low = toNumber(r.reorder_level) > 0 && toNumber(r.on_hand) <= toNumber(r.reorder_level);
+            return <span className={low ? "font-medium text-red-700" : undefined}>{formatQty(r.on_hand)}</span>;
+          }, { sortable: true, align: "right", minWidth: 90 }),
           col.qty("reserved", "Reserved", { sortable: true }),
           col.qty("available", "Available"),
           col.qty("reorder_level", "Reorder level"),
-          col.money("unit_cost", "Unit cost", { valueFormatter: (p: any) => formatAmount(p.value, 4) }),
+          rateColumn("unit_cost", "Unit cost"),
           col.money("value", "Value", { sortable: true }),
         ]}
         empty={{ title: "No stock found", description: "Try another warehouse or include zero-stock items." }} />
@@ -90,29 +89,25 @@ export function StockLedgerPage() {
           { type: "entity", name: "product", label: "Product", resource: "products" },
           { type: "select", name: "movement_type", label: "Type", options: MOVEMENT_TYPES },
         ]}
-        columns={(ctx) => [
-          col.date("date", "Date", ctx, { sortable: true }),
-          col.text("movement_number", "Movement", { minWidth: 160, cellClass: "font-medium text-brand-700" }),
+        columns={[
+          col.date("date", "Date", { sortable: true }),
+          col.text("movement_number", "Movement", { minWidth: 160, className: "font-medium text-brand-700" }),
           col.text("movement_type_label", "Type", { minWidth: 150 }),
           col.text("sku", "SKU", { minWidth: 120 }),
           col.text("product_name", "Product", { flex: 2, minWidth: 200 }),
-          col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
-          col.text("batch_number", "Batch", { maxWidth: 130 }),
-          col.qty("quantity", "Quantity", {
-            sortable: true,
-            cellClassRules: { "text-red-700": (p: CellClassParams) => toNumber(p.value) < 0, "text-emerald-700": (p: CellClassParams) => toNumber(p.value) > 0 },
-          }),
-          col.money("unit_cost", "Unit cost", { valueFormatter: (p: any) => formatAmount(p.value, 4) }),
+          col.text("warehouse_code", "Warehouse", { minWidth: 100 }),
+          col.text("batch_number", "Batch", { minWidth: 110 }),
+          col.custom("quantity", "Quantity", (r: any) => (
+            <span className={toNumber(r.quantity) < 0 ? "text-red-700" : "text-emerald-700"}>{formatQty(r.quantity)}</span>
+          ), { sortable: true, align: "right", minWidth: 90 }),
+          rateColumn("unit_cost", "Unit cost"),
           col.money("value", "Value", { sortable: true }),
           col.qty("balance_quantity", "Balance qty"),
           col.money("balance_value", "Balance value"),
-          col.text("reference_number", "Reference", {
-            minWidth: 160,
-            cellRenderer: (p: ICellRendererParams) => {
-              const to = referenceLink(p.data?.reference_type, p.data?.reference_id);
-              return to && p.value ? <Link className="link" to={to} onClick={(e) => e.stopPropagation()}>{p.value}</Link> : (p.value || "–");
-            },
-          }),
+          col.custom("reference_number", "Reference", (r: any) => {
+            const to = referenceLink(r.reference_type, r.reference_id);
+            return to && r.reference_number ? <Link className="link" to={to} onClick={(e) => e.stopPropagation()}>{r.reference_number}</Link> : (r.reference_number || "–");
+          }, { minWidth: 160 }),
           col.text("created_by_name", "By"),
         ]}
         empty={{ title: "No ledger entries", description: "Nothing was posted for these filters." }} />

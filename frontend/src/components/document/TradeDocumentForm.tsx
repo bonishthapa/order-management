@@ -1,38 +1,17 @@
 import { useEffect, useMemo, type ReactNode } from "react";
-import { Controller, useForm, useWatch, type Control, type UseFormRegister } from "react-hook-form";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api } from "@/api/client";
 import { useOptions } from "@/api/hooks";
-import { DatePicker } from "@/calendar/DatePicker";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
-import { EntitySelect } from "@/components/forms/EntitySelect";
-import { Button } from "@/components/ui/Button";
-import { Alert } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { NumberInput, Textarea } from "@/components/ui/Input";
+import { BaseForm, FormField, FormGrid, FormSection, useFormContext, useWatch } from "@/components/form";
 import { Panel } from "@/components/ui/Page";
 import { emptyLine, LineItemsEditor, TotalsPreview, type EditableLine, type TaxRate } from "./LineItemsEditor";
 import { computeTotals } from "./pricing";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export interface TradeFormValues {
-  party: number | null;
-  warehouse: number | null;
-  date: string;
-  secondary_date: string;
-  reference: string;
-  freight: string;
-  other_charges: string;
-  notes: string;
-  terms: string;
-  extra: Record<string, any>;
-  lines: EditableLine[];
-}
-
 export interface TradeDocumentFormProps {
   resource: string; // API resource, e.g. "sales-orders"
   detailPath: (id: number) => string;
@@ -46,153 +25,120 @@ export interface TradeDocumentFormProps {
   showTerms?: boolean;
   showCharges?: boolean;
   initial?: any; // existing document when editing
-  extraFields?: (ctx: { control: Control<TradeFormValues>; register: UseFormRegister<TradeFormValues> }) => ReactNode;
-  toPayload?: (values: TradeFormValues) => Record<string, any>;
+  /** Extra FormFields rendered in the details section (names are API field names). */
+  extraFields?: ReactNode;
+  extraDefaults?: Record<string, any>;
 }
 
-function fromDocument(doc: any, props: TradeDocumentFormProps): TradeFormValues {
-  return {
-    party: doc[props.party.field],
-    warehouse: doc.warehouse ?? null,
-    date: doc[props.dateField] ?? "",
-    secondary_date: props.secondaryDate ? doc[props.secondaryDate.field] ?? "" : "",
-    reference: props.referenceField ? doc[props.referenceField.field] ?? "" : "",
-    freight: doc.freight ?? "0",
-    other_charges: doc.other_charges ?? "0",
-    notes: doc.notes ?? "",
-    terms: doc.terms ?? "",
-    extra: {},
-    lines: (doc.lines ?? []).map((l: any) => ({
-      id: l.id, product: l.product, description: l.description ?? "", quantity: l.quantity, unit_price: l.unit_price,
-      discount_percent: l.discount_percent ?? "0", tax_rate: l.tax_rate ?? null, unit: l.unit,
-    })),
-  };
-}
-
-/** Shared create/edit form for orders, direct invoices and direct bills. The server computes every total. */
+/**
+ * Shared create/edit form for orders, direct invoices and direct bills, built on BaseForm.
+ * Form field names are the API field names, so server validation errors land on the right field.
+ * The server computes every total; the panel on the right is a preview.
+ */
 export function TradeDocumentForm(props: TradeDocumentFormProps) {
   const { resource, detailPath, party, dateField, dateLabel, secondaryDate, referenceField, warehouse, priceMode, showTerms = true,
-    showCharges = true, initial, extraFields, toPayload } = props;
+    showCharges = true, initial, extraFields, extraDefaults = {} } = props;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { session } = useAuth();
-  const presetParty = searchParams.get(party.field);
-  const taxes = useOptions<TaxRate>("tax-rates");
   const today = todayIn(session?.organization?.timezone);
-  const defaultTax = taxes.data?.find((t) => t.is_default)?.id ?? null;
-  const form = useForm<TradeFormValues>({
-    defaultValues: initial ? fromDocument(initial, props) : {
-      party: presetParty ? Number(presetParty) : null, warehouse: null, date: today, secondary_date: "", reference: "", freight: "0", other_charges: "0", notes: "", terms: "",
-      extra: {}, lines: [emptyLine()],
-    },
-  });
-  const { control, register, handleSubmit, setValue, setError, formState } = form;
-  useUnsavedChangesWarning(formState.isDirty && !formState.isSubmitSuccessful);
-  useEffect(() => {
-    if (!initial && defaultTax) form.getValues("lines").forEach((l, i) => l.tax_rate === null && !l.product && setValue(`lines.${i}.tax_rate`, defaultTax));
-  }, [defaultTax]); // apply the default tax to blank lines once rates load
+  const presetParty = searchParams.get(party.field);
 
-  const watched = useWatch({ control });
-  const totals = useMemo(() => {
-    const rate = (id: number | null | undefined) => Number(taxes.data?.find((t) => t.id === id)?.rate ?? 0);
-    return computeTotals((watched.lines ?? []).map((l: any) => ({ ...l, tax_percent: rate(l.tax_rate) })),
-      Number(watched.freight || 0), Number(watched.other_charges || 0));
-  }, [watched, taxes.data]);
+  const defaults: Record<string, any> = initial ? {
+    [party.field]: initial[party.field], [dateField]: initial[dateField] ?? "",
+    ...(secondaryDate ? { [secondaryDate.field]: initial[secondaryDate.field] ?? "" } : {}),
+    ...(referenceField ? { [referenceField.field]: initial[referenceField.field] ?? "" } : {}),
+    warehouse: initial.warehouse ?? null, freight: initial.freight ?? "0", other_charges: initial.other_charges ?? "0",
+    notes: initial.notes ?? "", terms: initial.terms ?? "",
+    ...Object.fromEntries(Object.keys(extraDefaults).map((k) => [k, initial[k] ?? extraDefaults[k]])),
+    lines: (initial.lines ?? []).map((l: any): EditableLine => ({
+      id: l.id, product: l.product, description: l.description ?? "", quantity: l.quantity, unit_price: l.unit_price,
+      discount_percent: l.discount_percent ?? "0", tax_rate: l.tax_rate ?? null, unit: l.unit,
+    })),
+  } : {
+    [party.field]: presetParty ? Number(presetParty) : null, [dateField]: today,
+    ...(secondaryDate ? { [secondaryDate.field]: "" } : {}), ...(referenceField ? { [referenceField.field]: "" } : {}),
+    warehouse: null, freight: "0", other_charges: "0", notes: "", terms: "", ...extraDefaults, lines: [emptyLine()],
+  };
 
-  const onSubmit = handleSubmit(async (values) => {
-    const lines = values.lines.filter((l) => l.product);
-    if (!values.party) return setError("party", { message: `Choose a ${party.label.toLowerCase()}.` });
-    if (warehouse?.required && !values.warehouse) return setError("warehouse", { message: "Choose a warehouse." });
-    if (!lines.length) return toast.error("Add at least one product line.");
+  const submit = async (values: Record<string, any>) => {
+    const lines = (values.lines as EditableLine[]).filter((l) => l.product);
+    if (!lines.length) throw new Error("Add at least one product line.");
     const payload: Record<string, any> = {
-      [party.field]: values.party,
-      [dateField]: values.date,
-      warehouse: values.warehouse,
-      notes: values.notes,
+      ...values,
       lines: lines.map(({ id: _id, unit: _u, ...l }) => ({ ...l, description: l.description ?? "" })),
-      ...(showCharges ? { freight: values.freight || "0", other_charges: values.other_charges || "0" } : {}),
-      ...(showTerms ? { terms: values.terms } : {}),
-      ...(secondaryDate && values.secondary_date ? { [secondaryDate.field]: values.secondary_date } : {}),
-      ...(referenceField ? { [referenceField.field]: values.reference } : {}),
-      ...(toPayload ? toPayload(values) : {}),
     };
     if (!warehouse) delete payload.warehouse;
-    try {
-      const { data } = initial
-        ? await api.patch(`/${resource}/${initial.id}/`, payload)
-        : await api.post(`/${resource}/`, payload);
-      queryClient.invalidateQueries({ queryKey: [resource] });
-      toast.success(initial ? "Changes saved" : "Draft saved");
-      navigate(detailPath(data.id));
-    } catch (e) {
-      const errors = fieldErrors(e);
-      const map: Record<string, string> = { [party.field]: "party", [dateField]: "date", ...(referenceField ? { [referenceField.field]: "reference" } : {}) };
-      Object.entries(errors).forEach(([field, message]) => setError((map[field] ?? field) as any, { message }));
-      toast.error(errorMessage(e));
-    }
-  });
+    if (!showCharges) { delete payload.freight; delete payload.other_charges; }
+    if (!showTerms) delete payload.terms;
+    if (secondaryDate && !payload[secondaryDate.field]) delete payload[secondaryDate.field];
+    const { data } = initial ? await api.patch(`/${resource}/${initial.id}/`, payload) : await api.post(`/${resource}/`, payload);
+    queryClient.invalidateQueries({ queryKey: [resource] });
+    toast.success(initial ? "Changes saved" : "Draft saved");
+    navigate(detailPath(data.id));
+  };
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4" noValidate>
-      {formState.errors.root && <Alert tone="error">{formState.errors.root.message}</Alert>}
-      <Panel title="Details">
-        <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label={party.label} required error={formState.errors.party?.message} className="lg:col-span-2">
-            <Controller control={control} name="party" render={({ field }) => (
-              <EntitySelect resource={party.resource} value={field.value} invalid={!!formState.errors.party} params={{ is_active: "true" }}
-                onChange={(id) => field.onChange(id)} sublabel={(c) => [c.phone, c.tax_id && `PAN ${c.tax_id}`].filter(Boolean).join(" · ")} />
-            )} />
-          </Field>
-          <Field label={dateLabel} required error={formState.errors.date?.message}>
-            <Controller control={control} name="date" render={({ field }) => (
-              <DatePicker value={field.value} onChange={field.onChange} required invalid={!!formState.errors.date} />
-            )} />
-          </Field>
-          {secondaryDate && (
-            <Field label={secondaryDate.label} error={(formState.errors as any)[secondaryDate.field]?.message}>
-              <Controller control={control} name="secondary_date" render={({ field }) => (
-                <DatePicker value={field.value} onChange={field.onChange} min={watched.date || undefined} />
-              )} />
-            </Field>
-          )}
-          {warehouse && (
-            <Field label={warehouse.label ?? "Warehouse"} required={warehouse.required} hint={warehouse.hint} error={formState.errors.warehouse?.message}>
-              <Controller control={control} name="warehouse" render={({ field }) => (
-                <EntitySelect resource="warehouses" value={field.value} onChange={(id) => field.onChange(id)} invalid={!!formState.errors.warehouse}
-                  params={{ is_active: "true" }} clearable={!warehouse.required} />
-              )} />
-            </Field>
-          )}
-          {referenceField && (
-            <Field label={referenceField.label} required={referenceField.required} error={formState.errors.reference?.message}>
-              <input className="control" {...register("reference", { required: referenceField.required ? "Required" : false })} />
-            </Field>
-          )}
-          {extraFields?.({ control, register })}
-        </div>
-      </Panel>
+    <BaseForm defaultValues={defaults} onSubmit={submit} submitLabel={initial ? "Save changes" : "Save as draft"} onCancel={() => navigate(-1)}>
+      <FormSection title="Details">
+        <FormField name={party.field} label={party.label} type="entity" resource={party.resource} params={{ is_active: "true" }} required span={2}
+          optionSublabel={(c) => [c.phone, c.tax_id && `PAN ${c.tax_id}`].filter(Boolean).join(" · ")} />
+        <FormField name={dateField} label={dateLabel} type="date" required />
+        {secondaryDate && <SecondaryDate field={secondaryDate.field} label={secondaryDate.label} minField={dateField} />}
+        {warehouse && (
+          <FormField name="warehouse" label={warehouse.label ?? "Warehouse"} type="entity" resource="warehouses" params={{ is_active: "true" }}
+            required={warehouse.required} hint={warehouse.hint} />
+        )}
+        {referenceField && <FormField name={referenceField.field} label={referenceField.label} required={referenceField.required} />}
+        {extraFields}
+      </FormSection>
       <Panel title="Items">
-        <LineItemsEditor control={control as any} register={register as any} setValue={setValue as any} errors={formState.errors as any}
-          priceMode={priceMode} customerId={party.field === "customer" ? watched.party : null} />
+        <LineItemsEditor priceMode={priceMode} customerField={party.field === "customer" ? "customer" : undefined} />
         <div className="flex flex-col gap-4 border-t border-line p-4 md:flex-row md:items-start md:justify-between">
-          <div className="grid flex-1 gap-3 sm:grid-cols-2">
-            {showCharges && (
-              <>
-                <Field label="Freight"><NumberInput {...register("freight")} /></Field>
-                <Field label="Other charges"><NumberInput {...register("other_charges")} /></Field>
-              </>
-            )}
-            <Field label="Notes" className="sm:col-span-2"><Textarea rows={2} {...register("notes")} /></Field>
-            {showTerms && <Field label="Terms and conditions" className="sm:col-span-2"><Textarea rows={3} {...register("terms")} /></Field>}
-          </div>
-          <TotalsPreview totals={totals} className="md:w-72" />
+          <FormGrid className="flex-1">
+            {showCharges && <>
+              <FormField name="freight" label="Freight" type="money" />
+              <FormField name="other_charges" label="Other charges" type="money" />
+            </>}
+            <FormField name="notes" label="Notes" type="textarea" rows={2} span={2} />
+            {showTerms && <FormField name="terms" label="Terms and conditions" type="textarea" rows={3} span={2} />}
+          </FormGrid>
+          <Totals />
         </div>
       </Panel>
-      <div className="flex justify-end gap-2">
-        <Button onClick={() => navigate(-1)}>Cancel</Button>
-        <Button type="submit" variant="primary" loading={formState.isSubmitting}>{initial ? "Save changes" : "Save as draft"}</Button>
-      </div>
-    </form>
+      <DefaultTax />
+    </BaseForm>
   );
+}
+
+function SecondaryDate({ field, label, minField }: { field: string; label: string; minField: string }) {
+  const min = useWatch({ name: minField });
+  return <FormField name={field} label={label} type="date" min={min || undefined} />;
+}
+
+function Totals() {
+  const taxes = useOptions<TaxRate>("tax-rates");
+  const lines = useWatch({ name: "lines" }) as EditableLine[];
+  const freight = useWatch({ name: "freight" });
+  const other = useWatch({ name: "other_charges" });
+  const totals = useMemo(() => {
+    const rate = (id: number | null | undefined) => Number(taxes.data?.find((t) => t.id === id)?.rate ?? 0);
+    return computeTotals((lines ?? []).map((l) => ({ ...l, tax_percent: rate(l.tax_rate) })), Number(freight || 0), Number(other || 0));
+  }, [lines, freight, other, taxes.data]);
+  return <TotalsPreview totals={totals} className="md:w-72" />;
+}
+
+/** Applies the organisation's default tax rate to blank new lines once tax rates have loaded. */
+function DefaultTax() {
+  const { getValues, setValue } = useFormContext();
+  const taxes = useOptions<TaxRate>("tax-rates");
+  const defaultTax = taxes.data?.find((t) => t.is_default)?.id ?? null;
+  useEffect(() => {
+    if (!defaultTax) return;
+    (getValues("lines") as EditableLine[]).forEach((l, i) => {
+      if (l.tax_rate === null && !l.product) setValue(`lines.${i}.tax_rate`, defaultTax);
+    });
+  }, [defaultTax, getValues, setValue]);
+  return null;
 }

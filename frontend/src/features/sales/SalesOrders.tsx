@@ -1,4 +1,5 @@
 import { CheckCircle2, FileText, Pencil, Plus, Send, Truck, XCircle } from "lucide-react";
+import { col, ResourceList } from "@/components/table";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,8 +8,6 @@ import { todayIn } from "@/calendar/bs";
 import { useDetail, useDocumentAction } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { DocumentLines, DocumentTotals } from "@/components/document/DocumentLines";
 import { PrintButton } from "@/components/document/PrintButton";
 import { DocumentTimeline } from "@/components/document/Timeline";
@@ -45,12 +44,12 @@ export function SalesOrderList() {
         detailPath={(r) => `/sales/orders/${r.id}`}
         exportUrl="/sales-orders/export/"
         filters={[{ type: "select", name: "status", label: "Status", options: SO_STATUSES }, { type: "entity", name: "customer", label: "Customer", resource: "customers" }]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Order", { sortable: true }),
-          col.date("order_date", "Date", ctx, { sortable: true }),
-          col.text("customer_name", "Customer", { flex: 2, sortable: true, sortField: "customer__name" } as any),
+          col.date("order_date", "Date", { sortable: true }),
+          col.text("customer_name", "Customer", { flex: 2, sortable: true, sortField: "customer__name" }),
           col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
-          col.date("expected_delivery_date", "Expected", ctx, { sortable: true }),
+          col.date("expected_delivery_date", "Expected", { sortable: true }),
           col.status("status", "Status", "status_label"),
           col.money("grand_total", "Amount", { sortable: true }),
         ]}
@@ -197,9 +196,9 @@ export function SalesOrderDetail() {
           </div>
           <Panel title="Items">
             <DocumentLines lines={so.lines} extra={[
-              { key: "reserved_quantity", label: "Reserved", align: "right", render: (l) => formatQty(l.reserved_quantity) },
-              { key: "delivered_quantity", label: "Delivered", align: "right", render: (l) => formatQty(l.delivered_quantity) },
-              { key: "invoiced_quantity", label: "Invoiced", align: "right", render: (l) => formatQty(l.invoiced_quantity) },
+              col.qty("reserved_quantity", "Reserved"),
+              col.qty("delivered_quantity", "Delivered"),
+              col.qty("invoiced_quantity", "Invoiced"),
             ]} />
             <div className="flex flex-col border-t border-line md:flex-row">
               <div className="flex-1 p-4 text-[13px] text-slate-600">

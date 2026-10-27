@@ -1,7 +1,6 @@
 import { useState } from "react";
+import { BaseTable, col, ResourceList } from "@/components/table";
 import type { AuditEvent } from "@/api/types";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { Dialog } from "@/components/ui/Dialog";
 import { PageHeader } from "@/components/ui/Page";
 import { formatDateTime } from "@/utils/format";
@@ -17,8 +16,8 @@ export function AuditTrail() {
       <PageHeader title="Audit trail" subtitle="Append-only record of every change, approval, posting, reversal, export and print. Nobody can edit it." />
       <ResourceList resource="audit-logs" gridId="audit" searchPlaceholder="Record, user, action, request ID…" exportUrl="/audit-logs/export/" exportName="audit-trail"
         filters={[{ type: "select", name: "entity_type", label: "Record type", options: ENTITY_TYPES.map((t) => ({ value: t, label: t.replace(/_/g, " ") })) }]}
-        columns={() => [
-          { ...col.text("created_at", "Time", { minWidth: 160 }), valueFormatter: (p) => formatDateTime(p.value) },
+        columns={[
+          col.datetime("created_at", "Time", { minWidth: 160 }),
           col.text("date_bs", "BS date", { maxWidth: 110 }),
           col.text("user_name", "User"),
           col.text("action", "Action", { flex: 1.5 }),
@@ -44,18 +43,12 @@ function AuditDetail({ event, onClose }: { event: AuditEvent; onClose: () => voi
     <Dialog open onOpenChange={(o) => !o && onClose()} title={`${event.action} · ${event.entity_label || event.entity_id}`} size="lg"
       description={`${formatDateTime(event.created_at)} (${event.date_bs} BS) by ${event.user_name ?? "system"} · request ${event.request_id || "–"}`}>
       {event.reason && <p className="mb-3 text-[13px]"><span className="font-medium">Reason:</span> {event.reason}</p>}
-      {keys.length === 0 ? <p className="text-xs text-slate-500">No field values were recorded for this event.</p> : (
-        <table className="w-full text-[13px]">
-          <thead className="border-b border-line text-left text-xs text-slate-500"><tr><th className="py-1.5">Field</th><th className="py-1.5">Before</th><th className="py-1.5">After</th></tr></thead>
-          <tbody>{keys.map((k) => (
-            <tr key={k} className="border-b border-line align-top">
-              <td className="py-1.5 pr-3 text-slate-500">{k.replace(/_/g, " ")}</td>
-              <td className="py-1.5 pr-3 break-all">{format(event.old_values?.[k])}</td>
-              <td className="py-1.5 break-all">{format(event.new_values?.[k])}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      )}
+      <BaseTable rows={keys.map((k) => ({ id: k, field: k }))} density="compact"
+        empty={<p className="text-xs text-slate-500">No field values were recorded for this event.</p>} columns={[
+          col.custom("field", "Field", (r: any) => <span className="text-slate-500">{r.field.replace(/_/g, " ")}</span>),
+          col.custom("before", "Before", (r: any) => <span className="break-all">{format(event.old_values?.[r.field])}</span>),
+          col.custom("after", "After", (r: any) => <span className="break-all">{format(event.new_values?.[r.field])}</span>),
+        ]} />
     </Dialog>
   );
 }

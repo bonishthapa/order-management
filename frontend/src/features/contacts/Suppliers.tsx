@@ -1,24 +1,21 @@
 import { Pencil, Plus } from "lucide-react";
-import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api } from "@/api/client";
 import { useDetail, useGet } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
 import { useAuth } from "@/auth/AuthContext";
-import { col, type ColumnContext } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
+import { BaseForm, FormField, FormSection } from "@/components/form";
+import { ResourceList, col, type TableColumn } from "@/components/table";
 import { Button } from "@/components/ui/Button";
 import { ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
 import { formatAmount, toNumber } from "@/utils/format";
 import {
   ACTIVE_OPTIONS, ActiveBadge, AuditActivity, CategoryField, OpeningBalancePanel, PartyAging, PartyDocuments, PartyLedger,
-  SummaryCard, useCategoryOptions, useFormState,
+  SummaryCard, useCategoryOptions,
 } from "./shared";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -41,15 +38,15 @@ export function SupplierList() {
           { type: "select", name: "is_active", label: "Status", options: ACTIVE_OPTIONS },
           { type: "boolean", name: "has_balance", label: "With balance" },
         ]}
-        columns={() => [
-          col.text("code", "Code", { sortable: true, maxWidth: 130, pinned: "left" }),
+        columns={[
+          col.text("code", "Code", { sortable: true, width: 130, pinned: true }),
           col.text("name", "Name", { sortable: true, flex: 2, minWidth: 200,
-            cellRenderer: (p: any) => <span className={p.data?.is_active ? "font-medium text-slate-800" : "text-slate-400"}>{p.value}{!p.data?.is_active && " (inactive)"}</span> }),
+            render: (r: any) => <span className={r.is_active ? "font-medium text-slate-800" : "text-slate-400"}>{r.name}{!r.is_active && " (inactive)"}</span> }),
           col.text("contact_person", "Contact"),
           col.text("phone", "Phone"),
           col.text("tax_id", "PAN/VAT"),
           col.text("category_name", "Category"),
-          col.number("payment_terms_days", "Terms (days)", { maxWidth: 120 }),
+          col.number("payment_terms_days", "Terms (days)", { width: 120 }),
           col.money("balance", "Balance", { sortable: true }),
         ]}
         empty={{ title: "No suppliers", description: "Add a supplier to start raising purchase orders." }} />
@@ -92,87 +89,47 @@ function SupplierFormBody({ initial }: { initial?: any }) {
   const queryClient = useQueryClient();
   const { can } = useAuth();
   const bankVisible = initial ? !!initial.bank_details_visible : can("suppliers.bank_view");
-  const { values: v, setField, errors, setErrors } = useFormState<SupplierValues>(initial ? fromSupplier(initial) : blank);
-  const [saving, setSaving] = useState(false);
 
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!v.name.trim()) e.name = "Enter the supplier name.";
-    if (!/^\d+$/.test(v.payment_terms_days)) e.payment_terms_days = "Enter a whole number of days.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    const body: Record<string, unknown> = { ...v, payment_terms_days: Number(v.payment_terms_days) };
+  const submit = async (v: SupplierValues) => {
+    const body: Record<string, unknown> = { ...v, name: v.name.trim(), payment_terms_days: Number(v.payment_terms_days) };
     if (!bankVisible) BANK_KEYS.forEach((k) => delete body[k]);
-    try {
-      const { data } = initial ? await api.patch(`/suppliers/${initial.id}/`, body) : await api.post("/suppliers/", body);
-      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      toast.success(initial ? "Supplier updated" : `Supplier ${data.code} created`);
-      navigate(`${BASE}/${data.id}`);
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+    const { data } = initial ? await api.patch(`/suppliers/${initial.id}/`, body) : await api.post("/suppliers/", body);
+    queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+    toast.success(initial ? "Supplier updated" : `Supplier ${data.code} created`);
+    navigate(`${BASE}/${data.id}`);
   };
-
-  const text = (key: keyof SupplierValues, label: string, opts: { required?: boolean; hint?: string; className?: string; type?: string } = {}) => (
-    <Field label={label} required={opts.required} error={errors[key]} hint={opts.hint} className={opts.className}>
-      <Input type={opts.type} value={v[key] as string} onChange={(e) => setField(key, e.target.value as any)} invalid={!!errors[key]} />
-    </Field>
-  );
 
   return (
     <>
       <PageHeader title={initial ? `Edit ${initial.name}` : "New supplier"}
         back={{ to: initial ? `${BASE}/${initial.id}` : BASE, label: initial ? initial.name : "Suppliers" }} />
-      <div className="space-y-4">
-        <Panel title="Supplier">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            {text("code", "Code", { hint: initial ? undefined : "Leave blank to number automatically." })}
-            {text("name", "Company name", { required: true, className: "lg:col-span-2" })}
-            <CategoryField kind="supplier" value={v.category} onChange={(c) => setField("category", c)} canCreate={can("suppliers.manage")}
-              error={errors.category} />
-            {text("contact_person", "Contact person")}
-            {text("phone", "Phone")}
-            {text("email", "Email", { type: "email" })}
-            {text("tax_id", "PAN/VAT number")}
-            <Field label="Address" error={errors.address} className="sm:col-span-2">
-              <Textarea value={v.address} onChange={(e) => setField("address", e.target.value)} />
-            </Field>
-            <Field label="Payment terms (days)" required error={errors.payment_terms_days}>
-              <NumberInput value={v.payment_terms_days} onChange={(e) => setField("payment_terms_days", e.target.value)} invalid={!!errors.payment_terms_days} />
-            </Field>
-            <Field label="Status" error={errors.is_active}>
-              <label className="flex h-8 items-center gap-2 text-[13px]">
-                <input type="checkbox" className="accent-brand-600" checked={v.is_active} onChange={(e) => setField("is_active", e.target.checked)} />
-                Active (can be used on new documents)
-              </label>
-            </Field>
-          </div>
-        </Panel>
+      <BaseForm<SupplierValues> defaultValues={initial ? fromSupplier(initial) : blank} onSubmit={submit}
+        submitLabel={initial ? "Save changes" : "Create supplier"} onCancel={() => navigate(-1)}>
+        <FormSection title="Supplier">
+          <FormField name="code" label="Code" uppercase hint={initial ? undefined : "Leave blank to number automatically."} />
+          <FormField name="name" label="Company name" required span={2} />
+          <CategoryField kind="supplier" canCreate={can("suppliers.manage")} />
+          <FormField name="contact_person" label="Contact person" />
+          <FormField name="phone" label="Phone" type="tel" />
+          <FormField name="email" label="Email" type="email" />
+          <FormField name="tax_id" label="PAN/VAT number" />
+          <FormField name="address" label="Address" type="textarea" span={2} />
+          <FormField name="payment_terms_days" label="Payment terms (days)" type="number" required
+            rules={{ pattern: { value: /^\d+$/, message: "Enter a whole number of days." } }} />
+          <FormField name="is_active" label="Status" type="checkbox" hint="Active (can be used on new documents)" />
+        </FormSection>
         {bankVisible && (
-          <Panel title="Bank details">
-            <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-              {text("bank_name", "Bank")}
-              {text("bank_branch", "Branch")}
-              {text("bank_account_name", "Account name")}
-              {text("bank_account_number", "Account number")}
-            </div>
-            <p className="px-4 pb-3 text-xs text-slate-500">Changes to bank details are recorded in the audit trail.</p>
-          </Panel>
+          <FormSection title="Bank details" description="Changes to bank details are recorded in the audit trail.">
+            <FormField name="bank_name" label="Bank" />
+            <FormField name="bank_branch" label="Branch" />
+            <FormField name="bank_account_name" label="Account name" />
+            <FormField name="bank_account_number" label="Account number" />
+          </FormSection>
         )}
-        <Panel title="Notes">
-          <div className="p-4">
-            <Textarea value={v.notes} onChange={(e) => setField("notes", e.target.value)} aria-label="Notes" />
-          </div>
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={submit}>{initial ? "Save changes" : "Create supplier"}</Button>
-        </div>
-      </div>
+        <FormSection title="Notes" columns={1}>
+          <FormField name="notes" label="Notes" type="textarea" />
+        </FormSection>
+      </BaseForm>
     </>
   );
 }
@@ -182,19 +139,19 @@ interface SupplierSummary {
   last_bill_date: string | null; unapplied_payments: number | string;
 }
 
-const orderColumns = (ctx: ColumnContext) => [
-  col.doc("number", "Order", { sortable: true }), col.date("order_date", "Date", ctx, { sortable: true }),
-  col.date("expected_delivery_date", "Expected", ctx), col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
+const orderColumns: TableColumn[] = [
+  col.doc("number", "Order", { sortable: true }), col.date("order_date", "Date", { sortable: true }),
+  col.date("expected_delivery_date", "Expected"), col.text("warehouse_code", "Warehouse", { width: 120 }),
   col.status("status", "Status", "status_label"), col.money("grand_total", "Amount", { sortable: true }),
 ];
-const billColumns = (ctx: ColumnContext) => [
+const billColumns: TableColumn[] = [
   col.doc("number", "Bill", { sortable: true }), col.text("supplier_invoice_number", "Supplier invoice"),
-  col.date("bill_date", "Date", ctx, { sortable: true }), col.date("due_date", "Due", ctx, { sortable: true }),
+  col.date("bill_date", "Date", { sortable: true }), col.date("due_date", "Due", { sortable: true }),
   col.status("status", "Status", "status_label"), col.status("payment_status", "Payment", "payment_status_label"),
   col.money("grand_total", "Amount", { sortable: true }), col.money("balance_due", "Outstanding"),
 ];
-const paymentColumns = (ctx: ColumnContext) => [
-  col.doc("number", "Voucher", { sortable: true }), col.date("date", "Date", ctx, { sortable: true }),
+const paymentColumns: TableColumn[] = [
+  col.doc("number", "Voucher", { sortable: true }), col.date("date", "Date", { sortable: true }),
   col.text("payment_method_name", "Method"), col.text("paid_from_account_name", "Paid from", { flex: 2 }),
   col.text("reference", "Reference"), col.status("status"), col.money("amount", "Amount", { sortable: true }),
   col.money("unapplied_amount", "Unapplied"),

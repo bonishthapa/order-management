@@ -1,19 +1,18 @@
 import { ImageUp, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useGet } from "@/api/hooks";
+import type { DateDisplayMode } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { BaseForm, FormField, FormSection, useWatch } from "@/components/form";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, Select, Textarea } from "@/components/ui/Input";
 import { PageHeader, Panel } from "@/components/ui/Page";
 import { formatDateTime, groupDigits } from "@/utils/format";
-import type { DateDisplayMode } from "@/api/types";
 
 export interface OrganizationSettings {
   id: number;
@@ -76,35 +75,45 @@ function pick(org: OrganizationSettings): FormState {
   return Object.fromEntries(EDITABLE.map((k) => [k, org[k]])) as FormState;
 }
 
+/** Grouping the chosen locale will use (the same rule as setNumberLocale). */
+function LocalePreview() {
+  const locale = (useWatch({ name: "locale" }) as string) ?? "";
+  const symbol = (useWatch({ name: "currency_symbol" }) as string) ?? "";
+  return <>Preview: {symbol} {groupDigits("1234567", /(NP|IN)$/i.test(locale) ? "lakh" : "thousand")}.89</>;
+}
+
+function FooterCount() {
+  const footer = (useWatch({ name: "document_footer" }) as string) ?? "";
+  return <>{footer.length}/300 characters. Printed at the bottom of every PDF.</>;
+}
+
+/** Checkbox with a description, bound to a boolean form field. */
+function RuleToggle({ name, label, description }: { name: EditableKey; label: string; description: ReactNode }) {
+  return (
+    <FormField name={name} label={<span className="sr-only">{label}</span>} type="custom" span="full"
+      render={({ value, onChange, disabled }) => (
+        <label className={`flex items-start gap-2.5 ${disabled ? "cursor-default opacity-80" : "cursor-pointer"}`}>
+          <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={!!value} disabled={disabled}
+            onChange={(e) => onChange(e.target.checked)} />
+          <span>
+            <span className="block text-[13px] font-medium text-slate-800">{label}</span>
+            <span className="block text-xs text-slate-500">{description}</span>
+          </span>
+        </label>
+      )} />
+  );
+}
+
 export function CompanySettingsPage() {
   const { can, reload } = useAuth();
   const queryClient = useQueryClient();
+  const formId = useId();
   const query = useGet<OrganizationSettings>(["organization", "current"], "/organizations/current/");
   const canManage = can("settings.manage");
-  const [form, setForm] = useState<FormState | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (query.data) setForm(pick(query.data));
-  }, [query.data]);
-
-  const dirtyKeys = useMemo(() => {
-    if (!form || !query.data) return [] as EditableKey[];
-    return EDITABLE.filter((k) => form[k] !== query.data![k]);
-  }, [form, query.data]);
-
-  if (query.isLoading || (query.data && !form)) return <LoadingBlock />;
-  if (query.error || !query.data || !form) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
+  if (query.isLoading) return <LoadingBlock />;
+  if (query.error || !query.data) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
   const org = query.data;
-
-  const set = <K extends EditableKey>(key: K, value: FormState[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
-  const text = (key: EditableKey) => ({
-    value: String(form[key] ?? ""),
-    disabled: !canManage,
-    invalid: !!errors[key],
-    onChange: (e: { target: { value: string } }) => set(key, e.target.value as never),
-  });
 
   const applySaved = async (data: OrganizationSettings) => {
     queryClient.setQueryData(["organization", "current", {}], data);
@@ -112,160 +121,95 @@ export function CompanySettingsPage() {
     await reload();
   };
 
-  const save = async () => {
-    const e: Record<string, string> = {};
-    if (!form.name.trim()) e.name = "Enter the organisation name.";
-    if (!form.currency.trim() || form.currency.trim().length !== 3) e.currency = "Use the 3-letter ISO currency code, e.g. NPR.";
-    if (!form.currency_symbol.trim()) e.currency_symbol = "Enter the symbol printed before amounts.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    try {
-      const body = Object.fromEntries(dirtyKeys.map((k) => [k, typeof form[k] === "string" ? (form[k] as string).trim() : form[k]]));
-      if ("currency" in body) body.currency = String(body.currency).toUpperCase();
-      const { data } = await api.patch<OrganizationSettings>("/organizations/current/", body);
-      await applySaved(data);
-      toast.success("Company settings saved");
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
+  const save = async (values: FormState) => {
+    const original = pick(org);
+    const body: Record<string, unknown> = {};
+    for (const k of EDITABLE) {
+      const v = typeof values[k] === "string" ? (values[k] as string).trim() : values[k];
+      if (v !== original[k]) body[k] = v;
     }
+    if (typeof body.currency === "string") body.currency = body.currency.toUpperCase();
+    if (!Object.keys(body).length) {
+      toast.info("No changes to save");
+      return;
+    }
+    const { data } = await api.patch<OrganizationSettings>("/organizations/current/", body);
+    await applySaved(data);
+    toast.success("Company settings saved");
   };
 
   return (
     <>
       <PageHeader title="Company settings" subtitle={`${org.legal_name || org.name} · code ${org.code}`}
         meta={!canManage && <Badge>Read only</Badge>}
-        actions={canManage && (<>
-          <Button disabled={!dirtyKeys.length || saving} onClick={() => { setForm(pick(org)); setErrors({}); }}>Discard changes</Button>
-          <Button variant="primary" loading={saving} disabled={!dirtyKeys.length} onClick={save}>Save settings</Button>
-        </>)} />
+        actions={canManage && <Button type="submit" form={formId} variant="primary">Save settings</Button>} />
       {!canManage && (
         <Alert tone="info" className="mb-4">Your role can view these settings. Changes need the "Change company settings" permission.</Alert>
       )}
-      <div className="space-y-4">
+      <BaseForm<FormState> key={org.updated_at} id={formId} defaultValues={pick(org)} onSubmit={save} submitLabel="Save settings"
+        disabled={!canManage}>
         <div className="grid gap-4 lg:grid-cols-3">
-          <Panel title="Organisation profile" className="lg:col-span-2">
-            <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2">
-              <Field label="Trading name" required error={errors.name}><Input {...text("name")} /></Field>
-              <Field label="Registered (legal) name" error={errors.legal_name} hint="Printed on invoices and statements.">
-                <Input {...text("legal_name")} />
-              </Field>
-              <Field label="PAN / VAT number" error={errors.tax_id}><Input {...text("tax_id")} /></Field>
-              <Field label="Email" error={errors.email}><Input type="email" {...text("email")} /></Field>
-              <Field label="Phone" error={errors.phone}><Input {...text("phone")} /></Field>
-              <Field label="Website" error={errors.website}><Input {...text("website")} /></Field>
-              <Field label="Address" error={errors.address} className="sm:col-span-2">
-                <Textarea rows={2} {...text("address")} />
-              </Field>
-              <Field label="City" error={errors.city}><Input {...text("city")} /></Field>
-              <Field label="Country" error={errors.country}><Input {...text("country")} /></Field>
-            </div>
-          </Panel>
-          <LogoPanel org={org} canManage={canManage} onSaved={applySaved} />
+          <div className="lg:col-span-2">
+            <FormSection title="Organisation profile" columns={2}>
+              <FormField name="name" label="Trading name" required maxLength={200} />
+              <FormField name="legal_name" label="Registered (legal) name" hint="Printed on invoices and statements." maxLength={200} />
+              <FormField name="tax_id" label="PAN / VAT number" maxLength={40} />
+              <FormField name="email" label="Email" type="email" />
+              <FormField name="phone" label="Phone" type="tel" maxLength={40} />
+              <FormField name="website" label="Website" maxLength={200} />
+              <FormField name="address" label="Address" type="textarea" rows={2} span={2} />
+              <FormField name="city" label="City" maxLength={100} />
+              <FormField name="country" label="Country" maxLength={60} />
+            </FormSection>
+          </div>
+          <div><LogoPanel org={org} canManage={canManage} onSaved={applySaved} /></div>
         </div>
 
-        <Panel title="Currency, locale and time">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Currency code" required error={errors.currency} hint="ISO 4217, e.g. NPR.">
-              <Input maxLength={3} {...text("currency")} />
-            </Field>
-            <Field label="Currency symbol" required error={errors.currency_symbol}><Input maxLength={8} {...text("currency_symbol")} /></Field>
-            <Field label="Number format" error={errors.locale}
-              hint={`Preview: ${form.currency_symbol} ${previewAmount(form.locale)}`}>
-              <Select {...text("locale")}>
-                {!LOCALES.some((l) => l.value === form.locale) && <option value={form.locale}>{form.locale}</option>}
-                {LOCALES.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
-              </Select>
-            </Field>
-            <Field label="Time zone" error={errors.timezone} hint="Decides today's business date and document timestamps.">
-              <Select {...text("timezone")}>
-                {timezones(form.timezone).map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-              </Select>
-            </Field>
-          </div>
-        </Panel>
+        <FormSection title="Currency, locale and time" columns={4}>
+          <FormField name="currency" label="Currency code" required maxLength={3} uppercase hint="ISO 4217, e.g. NPR."
+            rules={{ pattern: { value: /^[A-Za-z]{3}$/, message: "Use the 3-letter ISO currency code, e.g. NPR." } }} />
+          <FormField name="currency_symbol" label="Currency symbol" required maxLength={8} />
+          <FormField name="locale" label="Number format" type="select" emptyOption={false} hint={<LocalePreview />}
+            options={LOCALES.some((l) => l.value === org.locale) ? LOCALES : [{ value: org.locale, label: org.locale }, ...LOCALES]} />
+          <FormField name="timezone" label="Time zone" type="select" emptyOption={false}
+            hint="Decides today's business date and document timestamps."
+            options={timezones(org.timezone).map((tz) => ({ value: tz, label: tz }))} />
+        </FormSection>
 
-        <Panel title="Dates">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Default date display" error={errors.date_display_mode}
-              hint="Used for printed documents and for users who have not chosen their own preference.">
-              <Select {...text("date_display_mode")}>
-                {(Object.keys(DATE_MODE_LABELS) as DateDisplayMode[]).map((m) => <option key={m} value={m}>{DATE_MODE_LABELS[m]}</option>)}
-              </Select>
-            </Field>
-            <Field label="Default input calendar" error={errors.date_input_calendar}
-              hint="Calendar the date fields open in. Users can switch per field.">
-              <Select {...text("date_input_calendar")}>
-                <option value="BS">Bikram Sambat (BS)</option>
-                <option value="AD">Gregorian (AD)</option>
-              </Select>
-            </Field>
-          </div>
-        </Panel>
+        <FormSection title="Dates" columns={4}>
+          <FormField name="date_display_mode" label="Default date display" type="select" emptyOption={false}
+            hint="Used for printed documents and for users who have not chosen their own preference."
+            options={(Object.keys(DATE_MODE_LABELS) as DateDisplayMode[]).map((m) => ({ value: m, label: DATE_MODE_LABELS[m] }))} />
+          <FormField name="date_input_calendar" label="Default input calendar" type="select" emptyOption={false}
+            hint="Calendar the date fields open in. Users can switch per field."
+            options={[{ value: "BS", label: "Bikram Sambat (BS)" }, { value: "AD", label: "Gregorian (AD)" }]} />
+        </FormSection>
 
-        <Panel title="Business rules">
-          <div className="grid gap-x-6 gap-y-4 p-4 lg:grid-cols-2">
-            <Field label="Negative stock" error={errors.negative_stock_policy}
-              hint="Allowing negative stock costs the shortfall at the last known cost; it is corrected when stock arrives.">
-              <Select {...text("negative_stock_policy")}>
-                <option value="DISALLOW">Block postings that make stock negative</option>
-                <option value="ALLOW">Allow negative stock (costed at last known cost)</option>
-              </Select>
-            </Field>
-            <div className="space-y-2.5">
-              <Toggle label="Sales orders need approval" checked={form.require_sales_order_approval} disabled={!canManage}
-                description="Orders are submitted for approval before they can be delivered or invoiced."
-                onChange={(v) => set("require_sales_order_approval", v)} />
-              <Toggle label="Purchase orders need approval" checked={form.require_purchase_order_approval} disabled={!canManage}
-                description="Orders are submitted for approval before goods can be received."
-                onChange={(v) => set("require_purchase_order_approval", v)} />
-              <Toggle label="Expenses need approval" checked={form.require_expense_approval} disabled={!canManage}
-                description="Expenses are posted only after an approver accepts them."
-                onChange={(v) => set("require_expense_approval", v)} />
-              <Toggle label="Allow invoicing before delivery" checked={form.allow_invoice_before_delivery} disabled={!canManage}
-                description="Sales order quantities can be invoiced before they are delivered."
-                onChange={(v) => set("allow_invoice_before_delivery", v)} />
-            </div>
-          </div>
-        </Panel>
+        <FormSection title="Business rules" columns={2}>
+          <FormField name="negative_stock_policy" label="Negative stock" type="select" emptyOption={false}
+            hint="Allowing negative stock costs the shortfall at the last known cost; it is corrected when stock arrives."
+            options={[
+              { value: "DISALLOW", label: "Block postings that make stock negative" },
+              { value: "ALLOW", label: "Allow negative stock (costed at last known cost)" },
+            ]} />
+          <RuleToggle name="require_sales_order_approval" label="Sales orders need approval"
+            description="Orders are submitted for approval before they can be delivered or invoiced." />
+          <RuleToggle name="require_purchase_order_approval" label="Purchase orders need approval"
+            description="Orders are submitted for approval before goods can be received." />
+          <RuleToggle name="require_expense_approval" label="Expenses need approval"
+            description="Expenses are posted only after an approver accepts them." />
+          <RuleToggle name="allow_invoice_before_delivery" label="Allow invoicing before delivery"
+            description="Sales order quantities can be invoiced before they are delivered." />
+        </FormSection>
 
-        <Panel title="Printed documents">
-          <div className="grid gap-x-4 gap-y-3 p-4 lg:grid-cols-2">
-            <Field label="Terms and conditions" error={errors.terms_and_conditions} hint="Printed on sales invoices and quotations.">
-              <Textarea rows={6} {...text("terms_and_conditions")} />
-            </Field>
-            <Field label="Document footer" error={errors.document_footer} hint={`${form.document_footer.length}/300 characters. Printed at the bottom of every PDF.`}>
-              <Textarea rows={3} maxLength={300} {...text("document_footer")} />
-            </Field>
-          </div>
-        </Panel>
-
-        <p className="text-xs text-slate-400">Last changed {formatDateTime(org.updated_at, org.timezone)}</p>
-      </div>
+        <FormSection title="Printed documents" columns={2}>
+          <FormField name="terms_and_conditions" label="Terms and conditions" type="textarea" rows={6}
+            hint="Printed on sales invoices and quotations." />
+          <FormField name="document_footer" label="Document footer" type="textarea" rows={3} maxLength={300} hint={<FooterCount />} />
+        </FormSection>
+      </BaseForm>
+      <p className="mt-4 text-xs text-slate-400">Last changed {formatDateTime(org.updated_at, org.timezone)}</p>
     </>
-  );
-}
-
-/** Grouping the chosen locale will use (the same rule as setNumberLocale). */
-function previewAmount(locale: string) {
-  return `${groupDigits("1234567", /(NP|IN)$/i.test(locale) ? "lakh" : "thousand")}.89`;
-}
-
-export function Toggle({ label, description, checked, onChange, disabled }: {
-  label: ReactNode; description?: ReactNode; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
-}) {
-  return (
-    <label className={`flex items-start gap-2.5 ${disabled ? "cursor-default opacity-80" : "cursor-pointer"}`}>
-      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={checked} disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)} />
-      <span>
-        <span className="block text-[13px] font-medium text-slate-800">{label}</span>
-        {description && <span className="block text-xs text-slate-500">{description}</span>}
-      </span>
-    </label>
   );
 }
 

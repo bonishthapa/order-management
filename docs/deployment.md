@@ -38,7 +38,7 @@ and `docker compose up -d`. The proxy must pass `X-Forwarded-Proto: https`.
 | `DJANGO_SECRET_KEY` | Signing key for JWTs and sessions. Never reuse between environments. |
 | `DATABASE_URL` | PostgreSQL URL (compose builds it from `POSTGRES_*`). |
 | `JWT_ACCESS_MINUTES` / `JWT_REFRESH_DAYS` | Token lifetimes (15 min / 7 days; refresh tokens rotate and are blacklisted after use). |
-| `THROTTLE_AUTH`, `THROTTLE_PASSWORD_RESET`, `THROTTLE_USER` | Rate limits (20/min, 5/hour, 10000/hour). |
+| `THROTTLE_AUTH`, `THROTTLE_REFRESH`, `THROTTLE_PASSWORD_RESET`, `THROTTLE_USER` | Rate limits per IP for login (20/min) and token refresh (300/min), password reset (5/hour), and per user for the API (10000/hour). |
 | `EMAIL_BACKEND`, `DEFAULT_FROM_EMAIL` | SMTP settings for password-reset email (`django.core.mail.backends.smtp.EmailBackend` + `EMAIL_HOST` etc.). |
 | `LOG_LEVEL`, `LOG_FORMAT` | Logs go to stdout as JSON (with request IDs) when DEBUG is off. |
 | `GUNICORN_WORKERS` | Typically 2 × CPU + 1. |

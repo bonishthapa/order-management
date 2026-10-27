@@ -1,24 +1,21 @@
 import { Pencil, Plus } from "lucide-react";
-import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api } from "@/api/client";
 import { useDetail, useGet } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
 import { useAuth } from "@/auth/AuthContext";
-import { col, type ColumnContext } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
+import { BaseForm, FormField, FormSection, useFormContext } from "@/components/form";
+import { ResourceList, col, type TableColumn } from "@/components/table";
 import { Button } from "@/components/ui/Button";
 import { ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
 import { formatAmount, toNumber } from "@/utils/format";
 import {
   ACTIVE_OPTIONS, ActiveBadge, AuditActivity, CategoryField, OpeningBalancePanel, PartyAging, PartyDocuments, PartyLedger,
-  SummaryCard, useCategoryOptions, useFormState,
+  SummaryCard, useCategoryOptions,
 } from "./shared";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -41,10 +38,10 @@ export function CustomerList() {
           { type: "select", name: "is_active", label: "Status", options: ACTIVE_OPTIONS },
           { type: "boolean", name: "has_balance", label: "With balance" },
         ]}
-        columns={() => [
-          col.text("code", "Code", { sortable: true, maxWidth: 130, pinned: "left" }),
+        columns={[
+          col.text("code", "Code", { sortable: true, width: 130, pinned: true }),
           col.text("name", "Name", { sortable: true, flex: 2, minWidth: 200,
-            cellRenderer: (p: any) => <span className={p.data?.is_active ? "font-medium text-slate-800" : "text-slate-400"}>{p.value}{!p.data?.is_active && " (inactive)"}</span> }),
+            render: (r: any) => <span className={r.is_active ? "font-medium text-slate-800" : "text-slate-400"}>{r.name}{!r.is_active && " (inactive)"}</span> }),
           col.text("contact_person", "Contact"),
           col.text("phone", "Phone"),
           col.text("tax_id", "PAN/VAT"),
@@ -84,89 +81,50 @@ export function CustomerForm() {
   return <CustomerFormBody key={id ?? "new"} initial={query.data} />;
 }
 
+function SameAsBilling() {
+  const { getValues, setValue } = useFormContext<CustomerValues>();
+  return <button type="button" className="link" onClick={() => setValue("shipping_address", getValues("billing_address"), { shouldDirty: true })}>Same as billing</button>;
+}
+
 function CustomerFormBody({ initial }: { initial?: any }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { can } = useAuth();
-  const { values: v, setField, errors, setErrors } = useFormState<CustomerValues>(initial ? fromCustomer(initial) : blank);
-  const [saving, setSaving] = useState(false);
 
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!v.name.trim()) e.name = "Enter the customer name.";
-    if (v.credit_limit !== "" && (Number.isNaN(Number(v.credit_limit)) || toNumber(v.credit_limit) < 0)) e.credit_limit = "Enter zero or a positive amount.";
-    if (!/^\d+$/.test(v.payment_terms_days)) e.payment_terms_days = "Enter a whole number of days.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    const body = { ...v, credit_limit: v.credit_limit || "0", payment_terms_days: Number(v.payment_terms_days) };
-    try {
-      const { data } = initial ? await api.patch(`/customers/${initial.id}/`, body) : await api.post("/customers/", body);
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
-      toast.success(initial ? "Customer updated" : `Customer ${data.code} created`);
-      navigate(`${BASE}/${data.id}`);
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+  const submit = async (v: CustomerValues) => {
+    const body = { ...v, name: v.name.trim(), credit_limit: v.credit_limit || "0", payment_terms_days: Number(v.payment_terms_days) };
+    const { data } = initial ? await api.patch(`/customers/${initial.id}/`, body) : await api.post("/customers/", body);
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    toast.success(initial ? "Customer updated" : `Customer ${data.code} created`);
+    navigate(`${BASE}/${data.id}`);
   };
-
-  const text = (key: keyof CustomerValues, label: string, opts: { required?: boolean; hint?: string; className?: string; type?: string } = {}) => (
-    <Field label={label} required={opts.required} error={errors[key]} hint={opts.hint} className={opts.className}>
-      <Input type={opts.type} value={v[key] as string} onChange={(e) => setField(key, e.target.value as any)} invalid={!!errors[key]} />
-    </Field>
-  );
 
   return (
     <>
       <PageHeader title={initial ? `Edit ${initial.name}` : "New customer"}
         back={{ to: initial ? `${BASE}/${initial.id}` : BASE, label: initial ? initial.name : "Customers" }} />
-      <div className="space-y-4">
-        <Panel title="Customer">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            {text("code", "Code", { hint: initial ? undefined : "Leave blank to number automatically." })}
-            {text("name", "Company name", { required: true, className: "lg:col-span-2" })}
-            <CategoryField kind="customer" value={v.category} onChange={(c) => setField("category", c)} canCreate={can("customers.manage")}
-              error={errors.category} />
-            {text("contact_person", "Contact person")}
-            {text("phone", "Phone")}
-            {text("email", "Email", { type: "email" })}
-            {text("tax_id", "PAN/VAT number")}
-            <Field label="Billing address" error={errors.billing_address} className="sm:col-span-2">
-              <Textarea value={v.billing_address} onChange={(e) => setField("billing_address", e.target.value)} />
-            </Field>
-            <Field label="Shipping address" error={errors.shipping_address} className="sm:col-span-2"
-              hint={<button type="button" className="link" onClick={() => setField("shipping_address", v.billing_address)}>Same as billing</button>}>
-              <Textarea value={v.shipping_address} onChange={(e) => setField("shipping_address", e.target.value)} />
-            </Field>
-          </div>
-        </Panel>
-        <Panel title="Credit and terms">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Credit limit" error={errors.credit_limit} hint="0 means no limit is enforced.">
-              <NumberInput value={v.credit_limit} onChange={(e) => setField("credit_limit", e.target.value)} invalid={!!errors.credit_limit} />
-            </Field>
-            <Field label="Payment terms (days)" required error={errors.payment_terms_days}>
-              <NumberInput value={v.payment_terms_days} onChange={(e) => setField("payment_terms_days", e.target.value)} invalid={!!errors.payment_terms_days} />
-            </Field>
-            <Field label="Status" error={errors.is_active}>
-              <label className="flex h-8 items-center gap-2 text-[13px]">
-                <input type="checkbox" className="accent-brand-600" checked={v.is_active} onChange={(e) => setField("is_active", e.target.checked)} />
-                Active (can be used on new documents)
-              </label>
-            </Field>
-            <Field label="Notes" error={errors.notes} className="sm:col-span-2 lg:col-span-4">
-              <Textarea value={v.notes} onChange={(e) => setField("notes", e.target.value)} />
-            </Field>
-          </div>
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={submit}>{initial ? "Save changes" : "Create customer"}</Button>
-        </div>
-      </div>
+      <BaseForm<CustomerValues> defaultValues={initial ? fromCustomer(initial) : blank} onSubmit={submit}
+        submitLabel={initial ? "Save changes" : "Create customer"} onCancel={() => navigate(-1)}>
+        <FormSection title="Customer">
+          <FormField name="code" label="Code" uppercase hint={initial ? undefined : "Leave blank to number automatically."} />
+          <FormField name="name" label="Company name" required span={2} />
+          <CategoryField kind="customer" canCreate={can("customers.manage")} />
+          <FormField name="contact_person" label="Contact person" />
+          <FormField name="phone" label="Phone" type="tel" />
+          <FormField name="email" label="Email" type="email" />
+          <FormField name="tax_id" label="PAN/VAT number" />
+          <FormField name="billing_address" label="Billing address" type="textarea" span={2} />
+          <FormField name="shipping_address" label="Shipping address" type="textarea" span={2} hint={<SameAsBilling />} />
+        </FormSection>
+        <FormSection title="Credit and terms">
+          <FormField name="credit_limit" label="Credit limit" type="money" hint="0 means no limit is enforced."
+            rules={{ validate: (v: string) => v === "" || toNumber(v) >= 0 || "Enter zero or a positive amount." }} />
+          <FormField name="payment_terms_days" label="Payment terms (days)" type="number" required
+            rules={{ pattern: { value: /^\d+$/, message: "Enter a whole number of days." } }} />
+          <FormField name="is_active" label="Status" type="checkbox" hint="Active (can be used on new documents)" />
+          <FormField name="notes" label="Notes" type="textarea" span={4} />
+        </FormSection>
+      </BaseForm>
     </>
   );
 }
@@ -176,19 +134,19 @@ interface CustomerSummary {
   overdue_count: number; open_orders: number; last_invoice_date: string | null; unapplied_receipts: number | string;
 }
 
-const orderColumns = (ctx: ColumnContext) => [
-  col.doc("number", "Order", { sortable: true }), col.date("order_date", "Date", ctx, { sortable: true }),
-  col.date("expected_delivery_date", "Expected", ctx), col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
+const orderColumns: TableColumn[] = [
+  col.doc("number", "Order", { sortable: true }), col.date("order_date", "Date", { sortable: true }),
+  col.date("expected_delivery_date", "Expected"), col.text("warehouse_code", "Warehouse", { width: 120 }),
   col.status("status", "Status", "status_label"), col.money("grand_total", "Amount", { sortable: true }),
 ];
-const invoiceColumns = (ctx: ColumnContext) => [
-  col.doc("number", "Invoice", { sortable: true }), col.date("invoice_date", "Date", ctx, { sortable: true }),
-  col.date("due_date", "Due", ctx, { sortable: true }), col.status("status", "Status", "status_label"),
+const invoiceColumns: TableColumn[] = [
+  col.doc("number", "Invoice", { sortable: true }), col.date("invoice_date", "Date", { sortable: true }),
+  col.date("due_date", "Due", { sortable: true }), col.status("status", "Status", "status_label"),
   col.status("payment_status", "Payment", "payment_status_label"), col.money("grand_total", "Amount", { sortable: true }),
   col.money("balance_due", "Outstanding"),
 ];
-const receiptColumns = (ctx: ColumnContext) => [
-  col.doc("number", "Receipt", { sortable: true }), col.date("date", "Date", ctx, { sortable: true }),
+const receiptColumns: TableColumn[] = [
+  col.doc("number", "Receipt", { sortable: true }), col.date("date", "Date", { sortable: true }),
   col.text("payment_method_name", "Method"), col.text("reference", "Reference"), col.status("status"),
   col.money("amount", "Amount", { sortable: true }), col.money("unapplied_amount", "Unapplied"),
 ];

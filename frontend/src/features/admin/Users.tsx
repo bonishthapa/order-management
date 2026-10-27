@@ -1,19 +1,17 @@
-import type { ColDef, ICellRendererParams } from "ag-grid-community";
 import { Check, KeyRound, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useGet, useList, useOptions } from "@/api/hooks";
 import { useAuth } from "@/auth/AuthContext";
-import { DataTable } from "@/components/data/DataTable";
-import { FilterBar, SearchBox } from "@/components/data/Filters";
+import { FormDialog, FormField, FormGrid, useWatch } from "@/components/form";
+import { BaseTable, DataGrid, FilterBar, SearchBox, col, type TableColumn } from "@/components/table";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
-import { Alert, EmptyState, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, Select } from "@/components/ui/Input";
+import { ConfirmDialog } from "@/components/ui/Dialog";
+import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
+import { Select } from "@/components/ui/Input";
 import { PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -45,11 +43,23 @@ interface RoleMatrix {
 interface WarehouseOption { id: number; code: string; name: string; branch: number | null; is_active: boolean; is_transit: boolean }
 interface BranchOption { id: number; code: string; name: string; is_active: boolean }
 
+interface MemberValues {
+  email: string;
+  full_name: string;
+  phone: string;
+  role: string;
+  password: string;
+  warehouses: number[];
+  branches: number[];
+}
+
 const MODULE_LABELS: Record<string, string> = {
   dashboard: "Dashboard", settings: "Company settings", users: "Users", fiscal: "Fiscal years", customers: "Customers",
   suppliers: "Suppliers", products: "Products", inventory: "Inventory", sales: "Sales", purchases: "Purchases",
   accounting: "Accounting", expenses: "Expenses", reports: "Reports", audit: "Audit",
 };
+
+const EMAIL = /^\S+@\S+\.\S+$/;
 
 export function useRoleMatrix() {
   return useGet<RoleMatrix>(["users", "roles"], "/users/roles/");
@@ -90,44 +100,36 @@ function MembersGrid() {
   const warehouses = useOptions<WarehouseOption>("warehouses");
   const branches = useOptions<BranchOption>("branches");
   const query = useList<Member>("users", { search: debounced, role, is_active: active, page, page_size: pageSize, ordering });
+  const tz = session?.organization?.timezone;
 
-  const columns = useMemo<ColDef[]>(() => {
+  const columns = useMemo<TableColumn<Member>[]>(() => {
     const whCode = new Map((warehouses.data ?? []).map((w) => [w.id, w.code]));
     const brCode = new Map((branches.data ?? []).map((b) => [b.id, b.code]));
+    const codes = (ids: number[], map: Map<number, string>, all: string) => (ids.length
+      ? ids.map((id) => map.get(id) ?? `#${id}`).join(", ")
+      : <span className="text-slate-400">{all}</span>);
     return [
-      {
-        field: "full_name", headerName: "Name", minWidth: 180, flex: 2, sortable: true, sortField: "user__full_name",
-        cellRenderer: (p: ICellRendererParams<Member>) => (
-          <span className="font-medium text-brand-700">
-            {p.value}
-            {p.data?.user === session?.user.id && <span className="ml-1.5 text-2xs font-normal text-slate-400">(you)</span>}
-          </span>
-        ),
-      } as ColDef,
-      { field: "email", headerName: "Email", minWidth: 200, flex: 2 },
-      { field: "role_label", headerName: "Role", minWidth: 140, sortable: true, sortField: "role" } as ColDef,
-      {
-        colId: "warehouses", headerName: "Warehouses", minWidth: 150,
-        valueGetter: (p) => (p.data?.warehouses?.length ? p.data.warehouses.map((id: number) => whCode.get(id) ?? `#${id}`).join(", ") : "All warehouses"),
-        cellClass: (p) => (p.data?.warehouses?.length ? "" : "text-slate-400"),
-      },
-      {
-        colId: "branches", headerName: "Branches", minWidth: 130,
-        valueGetter: (p) => (p.data?.branches?.length ? p.data.branches.map((id: number) => brCode.get(id) ?? `#${id}`).join(", ") : "All branches"),
-        cellClass: (p) => (p.data?.branches?.length ? "" : "text-slate-400"),
-      },
-      {
-        field: "is_active", headerName: "Status", minWidth: 110, maxWidth: 140,
-        cellRenderer: (p: ICellRendererParams<Member>) => !p.data ? null
-          : !p.data.user_active ? <Badge tone="red">Account disabled</Badge>
-            : p.data.is_active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>,
-      },
-      {
-        field: "last_login", headerName: "Last sign-in", minWidth: 160, cellClass: "num-cell",
-        valueFormatter: (p) => (p.value ? formatDateTime(p.value, session?.organization?.timezone) : "Never"),
-      },
+      col.custom<Member>("full_name", "Name", (m) => (
+        <span className="font-medium text-brand-700">
+          {m.full_name}
+          {m.user === session?.user.id && <span className="ml-1.5 text-2xs font-normal text-slate-400">(you)</span>}
+        </span>
+      ), { minWidth: 180, flex: 2, sortable: true, sortField: "user__full_name" }),
+      col.text<Member>("email", "Email", { minWidth: 200, flex: 2 }),
+      col.text<Member>("role_label", "Role", { minWidth: 140, sortable: true, sortField: "role" }),
+      col.custom<Member>("warehouses", "Warehouses", (m) => codes(m.warehouses, whCode, "All warehouses"), {
+        minWidth: 150, value: (m) => (m.warehouses.length ? m.warehouses.map((id) => whCode.get(id) ?? `#${id}`).join(", ") : "All warehouses"),
+      }),
+      col.custom<Member>("branches", "Branches", (m) => codes(m.branches, brCode, "All branches"), {
+        minWidth: 130, value: (m) => (m.branches.length ? m.branches.map((id) => brCode.get(id) ?? `#${id}`).join(", ") : "All branches"),
+      }),
+      col.custom<Member>("is_active", "Status", (m) => (!m.user_active ? <Badge tone="red">Account disabled</Badge>
+        : m.is_active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>), { minWidth: 110 }),
+      col.custom<Member>("last_login", "Last sign-in", (m) => (m.last_login ? formatDateTime(m.last_login, tz) : "Never"), {
+        minWidth: 160, value: (m) => (m.last_login ? formatDateTime(m.last_login, tz) : "Never"),
+      }),
     ];
-  }, [warehouses.data, branches.data, session]);
+  }, [warehouses.data, branches.data, session, tz]);
 
   return (
     <div className="panel overflow-hidden">
@@ -143,7 +145,7 @@ function MembersGrid() {
           <option value="">All users</option>
         </Select>
       </FilterBar>
-      <DataTable<Member>
+      <DataGrid<Member>
         id="admin-users"
         columns={columns}
         rows={query.data?.results}
@@ -151,7 +153,7 @@ function MembersGrid() {
         page={page}
         pageSize={pageSize}
         onPageChange={setPage}
-        onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
+        onPageSizeChange={(s: number) => { setPageSize(s); setPage(1); }}
         ordering={ordering}
         onOrderingChange={setOrdering}
         loading={query.isLoading}
@@ -167,22 +169,22 @@ function MembersGrid() {
 }
 
 /** Checkbox list used for warehouse and branch restrictions. Empty selection means "no restriction". */
-function RestrictionPicker<T extends { id: number; code: string; name: string }>({ items, value, onChange, allLabel, loading }: {
-  items: T[]; value: number[]; onChange: (ids: number[]) => void; allLabel: string; loading?: boolean;
+function RestrictionPicker<T extends { id: number; code: string; name: string }>({ items, value, onChange, allLabel, loading, disabled }: {
+  items: T[]; value: number[]; onChange: (ids: number[]) => void; allLabel: string; loading?: boolean; disabled?: boolean;
 }) {
   const toggle = (id: number) => onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
   return (
     <div className="rounded border border-line">
       <div className="flex items-center justify-between border-b border-line bg-surface-muted px-2.5 py-1.5 text-xs">
         <span className="text-slate-600">{value.length ? `${value.length} selected` : allLabel}</span>
-        {value.length > 0 && <button type="button" className="link text-xs" onClick={() => onChange([])}>Clear</button>}
+        {value.length > 0 && !disabled && <button type="button" className="link text-xs" onClick={() => onChange([])}>Clear</button>}
       </div>
       <div className="max-h-36 overflow-y-auto p-1">
         {loading && <p className="px-2 py-1.5 text-xs text-slate-500">Loading…</p>}
         {!loading && items.length === 0 && <p className="px-2 py-1.5 text-xs text-slate-500">None configured.</p>}
         {items.map((item) => (
           <label key={item.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[13px] hover:bg-surface-sunken">
-            <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={value.includes(item.id)} onChange={() => toggle(item.id)} />
+            <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" disabled={disabled} checked={value.includes(item.id)} onChange={() => toggle(item.id)} />
             <span className="font-medium text-slate-700">{item.code}</span>
             <span className="truncate text-slate-500">{item.name}</span>
           </label>
@@ -199,49 +201,25 @@ function MemberDialog({ member, onClose }: { member?: Member; onClose: () => voi
   const warehouses = useOptions<WarehouseOption>("warehouses");
   const branches = useOptions<BranchOption>("branches");
   const isSelf = member?.user === session?.user.id;
-  const [email, setEmail] = useState(member?.email ?? "");
-  const [fullName, setFullName] = useState(member?.full_name ?? "");
-  const [phone, setPhone] = useState(member?.phone ?? "");
-  const [role, setRole] = useState(member?.role ?? "");
-  const [password, setPassword] = useState("");
-  const [selectedWarehouses, setSelectedWarehouses] = useState<number[]>(member?.warehouses ?? []);
-  const [selectedBranches, setSelectedBranches] = useState<number[]>(member?.branches ?? []);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<null | "deactivate" | "activate">(null);
   const [resetting, setResetting] = useState(false);
   const [toggling, setToggling] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["users"] });
 
-  const save = async () => {
-    const e: Record<string, string> = {};
-    if (!member && !/^\S+@\S+\.\S+$/.test(email.trim())) e.email = "Enter a valid email address.";
-    if (!fullName.trim()) e.full_name = "Enter the user's name.";
-    if (!role) e.role = "Choose a role.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
+  const submit = async (v: MemberValues) => {
     const body: Record<string, unknown> = {
-      full_name: fullName.trim(), phone: phone.trim(), role, warehouses: selectedWarehouses, branches: selectedBranches,
+      full_name: v.full_name.trim(), phone: (v.phone ?? "").trim(), role: v.role, warehouses: v.warehouses, branches: v.branches,
     };
-    try {
-      if (member) {
-        if (isSelf) delete body.role;
-        await api.patch(`/users/${member.id}/`, body);
-        toast.success("User updated");
-      } else {
-        await api.post("/users/", { ...body, email: email.trim().toLowerCase(), password });
-        toast.success(`${fullName.trim()} added`);
-      }
-      refresh();
-      onClose();
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
+    if (member) {
+      if (isSelf) delete body.role;
+      await api.patch(`/users/${member.id}/`, body);
+      toast.success("User updated");
+    } else {
+      await api.post("/users/", { ...body, email: v.email.trim().toLowerCase(), password: v.password });
+      toast.success(`${v.full_name.trim()} added`);
     }
+    refresh();
   };
 
   const toggleActive = async () => {
@@ -260,60 +238,49 @@ function MemberDialog({ member, onClose }: { member?: Member; onClose: () => voi
     }
   };
 
-  const activeWarehouses = (warehouses.data ?? []).filter((w) => w.is_active || selectedWarehouses.includes(w.id));
-  const activeBranches = (branches.data ?? []).filter((b) => b.is_active || selectedBranches.includes(b.id));
+  const defaults: MemberValues = {
+    email: member?.email ?? "", full_name: member?.full_name ?? "", phone: member?.phone ?? "", role: member?.role ?? "",
+    password: "", warehouses: member?.warehouses ?? [], branches: member?.branches ?? [],
+  };
+  const roleOptions = (roles.data?.roles ?? []).map((r) => ({ value: r.code, label: r.label }));
 
   return (
     <>
-      <Dialog open onOpenChange={(o) => !o && onClose()} size="lg" title={member ? `Edit ${member.full_name}` : "Add user"}
+      <FormDialog<MemberValues> footerActions={member && (
+        <>
+          <Button size="sm" icon={<KeyRound className="h-3.5 w-3.5" />} onClick={() => setResetting(true)}>Reset password</Button>
+          {!isSelf && (member.is_active
+            ? <Button size="sm" variant="danger" onClick={() => setConfirm("deactivate")}>Deactivate</Button>
+            : <Button size="sm" onClick={() => setConfirm("activate")}>Reactivate</Button>)}
+        </>
+      )} open onOpenChange={(o) => !o && onClose()} size="lg" title={member ? `Edit ${member.full_name}` : "Add user"}
         description={member ? member.email : "The user signs in with this email and must choose a new password at first sign-in."}
-        footer={<>
-          {member && (
-            <div className="mr-auto flex gap-2">
-              <Button icon={<KeyRound className="h-3.5 w-3.5" />} onClick={() => setResetting(true)}>Reset password</Button>
-              {!isSelf && (member.is_active
-                ? <Button variant="danger" onClick={() => setConfirm("deactivate")}>Deactivate</Button>
-                : <Button onClick={() => setConfirm("activate")}>Reactivate</Button>)}
-            </div>
-          )}
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={save}>{member ? "Save changes" : "Add user"}</Button>
-        </>}>
-        <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-          <Field label="Email" required={!member} error={errors.email} hint={member ? "The sign-in email cannot be changed here." : undefined}>
-            <Input type="email" autoComplete="off" value={email} disabled={!!member} onChange={(e) => setEmail(e.target.value)} invalid={!!errors.email} />
-          </Field>
-          <Field label="Full name" required error={errors.full_name}>
-            <Input value={fullName} onChange={(e) => setFullName(e.target.value)} invalid={!!errors.full_name} />
-          </Field>
-          <Field label="Phone" error={errors.phone}><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
-          <Field label="Role" required error={errors.role} hint={isSelf ? "You cannot change your own role." : undefined}>
-            <Select value={role} disabled={isSelf} onChange={(e) => setRole(e.target.value)} invalid={!!errors.role}>
-              <option value="">Choose…</option>
-              {roles.data?.roles.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
-            </Select>
-          </Field>
+        submitLabel={member ? "Save changes" : "Add user"} defaultValues={defaults} onSubmit={submit}>
+        <FormGrid columns={2}>
+          <FormField name="email" label="Email" type="email" required={!member} disabled={!!member}
+            hint={member ? "The sign-in email cannot be changed here." : undefined}
+            rules={member ? undefined : { pattern: { value: EMAIL, message: "Enter a valid email address." } }} />
+          <FormField name="full_name" label="Full name" required />
+          <FormField name="phone" label="Phone" type="tel" />
+          <FormField name="role" label="Role" type="select" required options={roleOptions} disabled={isSelf}
+            hint={isSelf ? "You cannot change your own role." : undefined} />
           {!member && (
-            <Field label="Initial password" error={errors.password} className="sm:col-span-2"
-              hint="Required for a new account (at least 10 characters). Leave blank only if the person already has an account in another organisation.">
-              <Input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} invalid={!!errors.password} />
-            </Field>
+            <FormField name="password" label="Initial password" type="password" span="full"
+              hint="Required for a new account (at least 10 characters). Leave blank only if the person already has an account in another organisation." />
           )}
-          <Field label="Warehouse access" error={errors.warehouses} hint="Leave empty to allow every warehouse.">
-            <RestrictionPicker items={activeWarehouses} value={selectedWarehouses} onChange={setSelectedWarehouses}
-              allLabel="All warehouses" loading={warehouses.isLoading} />
-          </Field>
-          <Field label="Branch access" error={errors.branches} hint="Leave empty to allow every branch.">
-            <RestrictionPicker items={activeBranches} value={selectedBranches} onChange={setSelectedBranches}
-              allLabel="All branches" loading={branches.isLoading} />
-          </Field>
-          {role && roles.data && (
-            <div className="sm:col-span-2">
-              <RoleSummary permissions={roles.data.roles.find((r) => r.code === role)?.permissions ?? []} matrix={roles.data} />
-            </div>
-          )}
-        </div>
-      </Dialog>
+          <FormField name="warehouses" label="Warehouse access" type="custom" hint="Leave empty to allow every warehouse."
+            render={({ value, onChange, disabled }) => (
+              <RestrictionPicker items={(warehouses.data ?? []).filter((w) => w.is_active || (value as number[]).includes(w.id))}
+                value={value ?? []} onChange={onChange} allLabel="All warehouses" loading={warehouses.isLoading} disabled={disabled} />
+            )} />
+          <FormField name="branches" label="Branch access" type="custom" hint="Leave empty to allow every branch."
+            render={({ value, onChange, disabled }) => (
+              <RestrictionPicker items={(branches.data ?? []).filter((b) => b.is_active || (value as number[]).includes(b.id))}
+                value={value ?? []} onChange={onChange} allLabel="All branches" loading={branches.isLoading} disabled={disabled} />
+            )} />
+          {roles.data && <RoleSummary matrix={roles.data} />}
+        </FormGrid>
+      </FormDialog>
       {member && (
         <ConfirmDialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)} loading={toggling}
           title={confirm === "deactivate" ? `Deactivate ${member.full_name}?` : `Reactivate ${member.full_name}?`}
@@ -329,13 +296,16 @@ function MemberDialog({ member, onClose }: { member?: Member; onClose: () => voi
   );
 }
 
-function RoleSummary({ permissions, matrix }: { permissions: string[]; matrix: RoleMatrix }) {
-  const granted = new Set(permissions);
+/** Summary of the role currently chosen in the member form. */
+function RoleSummary({ matrix }: { matrix: RoleMatrix }) {
+  const role = useWatch({ name: "role" }) as string;
+  if (!role) return null;
+  const granted = new Set(matrix.roles.find((r) => r.code === role)?.permissions ?? []);
   const groups = groupPermissions(matrix.permissions).map(([module, perms]) => ({
     module, count: perms.filter((p) => granted.has(p.code)).length, total: perms.length,
   })).filter((g) => g.count > 0);
   return (
-    <div className="rounded border border-line bg-surface-muted px-3 py-2">
+    <div className="col-span-full rounded border border-line bg-surface-muted px-3 py-2">
       <p className="mb-1.5 text-xs font-medium text-slate-600">This role grants</p>
       <div className="flex flex-wrap gap-1.5">
         {groups.map((g) => (
@@ -347,39 +317,24 @@ function RoleSummary({ permissions, matrix }: { permissions: string[]; matrix: R
 }
 
 function ResetPasswordDialog({ member, onClose }: { member: Member; onClose: () => void }) {
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const submit = async () => {
-    setError(null);
-    if (password.length < 10) return setError("Use at least 10 characters.");
-    if (password !== confirm) return setError("The passwords do not match.");
-    setSaving(true);
-    try {
-      await api.post(`/users/${member.id}/reset-password/`, { new_password: password });
-      toast.success(`Temporary password set for ${member.full_name}`);
-      onClose();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} size="sm" title={`Reset password for ${member.full_name}`}
+    <FormDialog<{ new_password: string; confirm: string }> open onOpenChange={(o) => !o && onClose()} size="sm"
+      title={`Reset password for ${member.full_name}`} submitLabel="Set temporary password"
       description="Give the temporary password to the user in person. They must choose a new one at their next sign-in."
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={submit}>Set temporary password</Button></>}>
-      <div className="space-y-3">
-        {error && <Alert tone="error">{error}</Alert>}
-        <Field label="Temporary password" required>
-          <Input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </Field>
-        <Field label="Confirm password" required>
-          <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-        </Field>
-      </div>
-    </Dialog>
+      defaultValues={{ new_password: "", confirm: "" }}
+      onSubmit={async (v) => {
+        await api.post(`/users/${member.id}/reset-password/`, { new_password: v.new_password });
+        toast.success(`Temporary password set for ${member.full_name}`);
+      }}>
+      {(form) => (
+        <FormGrid columns={1}>
+          <FormField name="new_password" label="Temporary password" type="password" required autoFocus
+            rules={{ minLength: { value: 10, message: "Use at least 10 characters." } }} />
+          <FormField name="confirm" label="Confirm password" type="password" required
+            rules={{ validate: (v: string) => v === form.getValues("new_password") || "The passwords do not match." }} />
+        </FormGrid>
+      )}
+    </FormDialog>
   );
 }
 
@@ -393,61 +348,41 @@ function groupPermissions(perms: { code: string; label: string }[]): [string, { 
   return [...groups.entries()];
 }
 
+type MatrixRow = { id: string; group?: string; code?: string; label?: string };
+
 function RoleMatrixView() {
   const query = useRoleMatrix();
+  const data = query.data;
+  const { rows, columns } = useMemo(() => {
+    if (!data) return { rows: [] as MatrixRow[], columns: [] as TableColumn<MatrixRow>[] };
+    const grants = new Map(data.roles.map((r) => [r.code, new Set(r.permissions)]));
+    const rows: MatrixRow[] = groupPermissions(data.permissions).flatMap(([module, perms]) => [
+      { id: `g:${module}`, group: MODULE_LABELS[module] ?? module },
+      ...perms.map((p) => ({ id: p.code, code: p.code, label: p.label })),
+    ]);
+    const columns: TableColumn<MatrixRow>[] = [
+      col.custom<MatrixRow>("permission", "Permission", (r) => (r.group
+        ? <span className="text-2xs font-semibold uppercase tracking-wide text-slate-500">{r.group}</span>
+        : <><div className="text-slate-800">{r.label}</div><div className="text-2xs text-slate-400">{r.code}</div></>), { minWidth: 260 }),
+      ...data.roles.map((role) => col.custom<MatrixRow>(role.code, role.label, (r) => {
+        if (r.group) return null;
+        const has = grants.get(role.code)?.has(r.code!);
+        return has
+          ? <Check className="mx-auto h-4 w-4 text-emerald-600" aria-label="Granted" />
+          : <span className="text-slate-300" aria-label="Not granted">–</span>;
+      }, { align: "center", width: 96, headerClassName: "whitespace-normal" })),
+    ];
+    return { rows, columns };
+  }, [data]);
+
   if (query.isLoading) return <LoadingBlock />;
-  if (query.error || !query.data) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
-  const { roles, permissions } = query.data;
-  if (!roles.length) return <EmptyState title="No roles defined" />;
-  const grants = new Map(roles.map((r) => [r.code, new Set(r.permissions)]));
+  if (query.error || !data) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
+  if (!data.roles.length) return <EmptyState title="No roles defined" />;
   return (
     <Panel title="Role permission matrix"
       actions={<span className="text-xs text-slate-500">Roles are fixed; the server checks every request against this matrix.</span>}>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-[13px]">
-          <thead className="sticky top-0 border-b border-line bg-surface-muted text-xs text-slate-500">
-            <tr>
-              <th className="px-4 py-2 text-left font-medium">Permission</th>
-              {roles.map((r) => <th key={r.code} className="w-[96px] px-2 py-2 text-center font-medium">{r.label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {groupPermissions(permissions).map(([module, perms]) => (
-              <ModuleRows key={module} module={module} perms={perms} roles={roles.map((r) => r.code)} grants={grants} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <BaseTable<MatrixRow> columns={columns} rows={rows} density="compact" minWidth={900} stickyHeader caption="Role permission matrix"
+        rowKey={(r) => r.id} rowClassName={(r) => cn(r.group ? "bg-surface-sunken/60" : "hover:bg-surface-muted")} />
     </Panel>
-  );
-}
-
-function ModuleRows({ module, perms, roles, grants }: {
-  module: string; perms: { code: string; label: string }[]; roles: string[]; grants: Map<string, Set<string>>;
-}) {
-  return (
-    <>
-      <tr className="border-b border-line bg-surface-sunken/60">
-        <td colSpan={roles.length + 1} className="px-4 py-1.5 text-2xs font-semibold uppercase tracking-wide text-slate-500">
-          {MODULE_LABELS[module] ?? module}
-        </td>
-      </tr>
-      {perms.map((p) => (
-        <tr key={p.code} className="border-b border-line hover:bg-surface-muted">
-          <td className="px-4 py-1.5">
-            <div className="text-slate-800">{p.label}</div>
-            <div className="text-2xs text-slate-400">{p.code}</div>
-          </td>
-          {roles.map((r) => {
-            const has = grants.get(r)?.has(p.code);
-            return (
-              <td key={r} className={cn("px-2 py-1.5 text-center", has ? "text-emerald-600" : "text-slate-300")}>
-                {has ? <Check className="mx-auto h-4 w-4" aria-label="Granted" /> : <span aria-label="Not granted">–</span>}
-              </td>
-            );
-          })}
-        </tr>
-      ))}
-    </>
   );
 }

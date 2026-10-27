@@ -1,26 +1,23 @@
 import { CheckCircle2, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction, useOptions } from "@/api/hooks";
-import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { PrintButton } from "@/components/document/PrintButton";
 import { ReverseAction } from "@/components/document/ReverseAction";
 import { DocumentTimeline } from "@/components/document/Timeline";
 import { EntitySelect } from "@/components/forms/EntitySelect";
+import { BaseForm, CellInput, FormField, FormSection, useFieldArray, useFormContext, useWatch } from "@/components/form";
+import { BaseTable, ResourceList, col, type TableColumn } from "@/components/table";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Select, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, formatDateTime, round2, toNumber } from "@/utils/format";
 import { linkFor } from "@/utils/links";
@@ -58,12 +55,12 @@ export function JournalList() {
           { type: "select", name: "status", label: "Status", options: JOURNAL_STATUSES },
           { type: "entity", name: "lines__account", label: "Account", resource: "accounts", params: { is_group: "false" } },
         ]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Voucher", { sortable: true }),
-          col.date("date", "Date", ctx, { sortable: true }),
+          col.date("date", "Date", { sortable: true }),
           col.text("source_label", "Source"),
           col.text("source_number", "Document"),
-          col.text("narration", "Narration", { flex: 3, minWidth: 240, tooltipField: "narration" }),
+          col.text("narration", "Narration", { flex: 3, minWidth: 240 }),
           col.status("status"),
           col.money("total_debit", "Amount", { sortable: true }),
         ]}
@@ -74,12 +71,12 @@ export function JournalList() {
 
 interface AccountOption { id: number; code: string; name: string; system_key: string; is_active: boolean }
 interface EditLine {
-  key: number; account: number | null; customer: number | null; supplier: number | null; debit: string; credit: string; description: string;
+  account: number | null; customer: number | null; supplier: number | null; debit: string; credit: string; description: string;
   customer_name?: string | null; supplier_name?: string | null;
 }
+interface JournalValues { date: string; narration: string; source: string; lines: EditLine[] }
 
-let lineKey = 0;
-const newLine = (): EditLine => ({ key: ++lineKey, account: null, customer: null, supplier: null, debit: "", credit: "", description: "" });
+const newLine = (): EditLine => ({ account: null, customer: null, supplier: null, debit: "", credit: "", description: "" });
 
 export function JournalForm() {
   const { id } = useParams();
@@ -98,48 +95,123 @@ export function JournalForm() {
   return <JournalFormBody key={id ?? "new"} initial={doc} />;
 }
 
+/** Editable journal lines (field array "lines") with live debit/credit totals. */
+function JournalLinesEditor({ systemKey }: { systemKey: Map<number, string> }) {
+  const { control, setValue, formState } = useFormContext<JournalValues>();
+  const { fields, append, remove } = useFieldArray({ control, name: "lines" });
+  const lines = (useWatch<JournalValues, "lines">({ name: "lines" }) ?? []) as EditLine[];
+  const disabled = formState.isSubmitting;
+  const errOf = (i: number, f: string) => ((formState.errors.lines as any)?.[i]?.[f]?.message as string | undefined);
+
+  // A line carries either a debit or a credit: typing on one side clears the other.
+  const previous = useRef<EditLine[]>(lines);
+  useEffect(() => {
+    lines.forEach((l, i) => {
+      const before = previous.current[i];
+      if (!before) return;
+      if (l.debit && l.debit !== before.debit && l.credit) setValue(`lines.${i}.credit`, "");
+      if (l.credit && l.credit !== before.credit && l.debit) setValue(`lines.${i}.debit`, "");
+    });
+    previous.current = lines;
+  }, [lines, setValue]);
+
+  const totalDebit = round2(lines.reduce((s, l) => s + toNumber(l.debit), 0));
+  const totalCredit = round2(lines.reduce((s, l) => s + toNumber(l.credit), 0));
+  const difference = round2(totalDebit - totalCredit);
+  const rows = fields.map((f, index) => ({ id: f.id, index }));
+  type Row = (typeof rows)[number];
+
+  const columns: TableColumn<Row>[] = [
+    col.custom("n", "#", (r) => <span className="text-xs text-slate-400">{r.index + 1}</span>, { width: 32 }),
+    col.custom("account", "Account", (r) => (
+      <>
+        <EntitySelect resource="accounts" params={{ is_group: "false", is_active: "true" }} value={lines[r.index]?.account ?? null}
+          disabled={disabled} invalid={!!errOf(r.index, "account")} placeholder="Account…"
+          onChange={(account) => {
+            setValue(`lines.${r.index}.account`, account, { shouldDirty: true });
+            setValue(`lines.${r.index}.customer`, null);
+            setValue(`lines.${r.index}.supplier`, null);
+          }} />
+        {errOf(r.index, "account") && <p className="mt-0.5 text-2xs text-red-600">{errOf(r.index, "account")}</p>}
+      </>
+    ), { width: 260 }),
+    col.custom("party", "Party", (r) => {
+      const line = lines[r.index];
+      const key = line?.account ? systemKey.get(line.account) : "";
+      const field = key === "RECEIVABLE" ? "customer" : key === "PAYABLE" ? "supplier" : null;
+      if (!field) return <span className="block pt-1.5 text-xs text-slate-400">Not required</span>;
+      const error = errOf(r.index, field);
+      return (
+        <>
+          <EntitySelect resource={field === "customer" ? "customers" : "suppliers"} value={line[field]} disabled={disabled} invalid={!!error}
+            initialLabel={(field === "customer" ? line.customer_name : line.supplier_name) ?? undefined}
+            placeholder={field === "customer" ? "Customer…" : "Supplier…"}
+            onChange={(v) => setValue(`lines.${r.index}.${field}`, v, { shouldDirty: true })} />
+          {error && <p className="mt-0.5 text-2xs text-red-600">{error}</p>}
+        </>
+      );
+    }, { width: 220 }),
+    col.custom("debit", "Debit", (r) => <CellInput name={`lines.${r.index}.debit`} label={`Debit line ${r.index + 1}`} number disabled={disabled} />,
+      { width: 128, align: "right", footer: formatAmount(totalDebit) }),
+    col.custom("credit", "Credit", (r) => <CellInput name={`lines.${r.index}.credit`} label={`Credit line ${r.index + 1}`} number disabled={disabled} />,
+      { width: 128, align: "right", footer: formatAmount(totalCredit) }),
+    col.custom("description", "Description", (r) => (
+      <CellInput name={`lines.${r.index}.description`} label={`Description line ${r.index + 1}`} disabled={disabled} />
+    ), {
+      footer: <span className={cn(difference === 0 ? "text-emerald-700" : "text-red-700")}>
+        {difference === 0 ? (totalDebit ? "Balanced" : "") : `Difference ${formatAmount(Math.abs(difference))} (${difference > 0 ? "debit" : "credit"} side higher)`}
+      </span>,
+    }),
+    col.custom("remove", "", (r) => (
+      <Button size="sm" variant="ghost" aria-label={`Remove line ${r.index + 1}`} disabled={disabled || fields.length <= 2}
+        onClick={() => remove(r.index)}><X className="h-3.5 w-3.5" /></Button>
+    ), { width: 40 }),
+  ];
+
+  return (
+    <FormSection title="Lines" bodyClassName="p-0"
+      actions={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} disabled={disabled} onClick={() => append(newLine())}>Add line</Button>}>
+      <div className="col-span-full">
+        <BaseTable rows={rows} rowKey={(r) => r.id} columns={columns} footer density="compact" minWidth={980} />
+        <p className="px-4 py-2 text-xs text-slate-500">Lines on accounts receivable or payable must name the customer or supplier. A draft may be unbalanced; posting requires debits to equal credits.</p>
+      </div>
+    </FormSection>
+  );
+}
+
 function JournalFormBody({ initial }: { initial?: any }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAuth();
   const accounts = useOptions<AccountOption>("accounts", { is_group: "false" });
   const systemKey = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a.system_key])), [accounts.data]);
-  const [date, setDate] = useState<string>(initial?.date ?? todayIn(session?.organization?.timezone));
-  const [narration, setNarration] = useState<string>(initial?.narration ?? "");
-  const [source, setSource] = useState<string>(initial?.source ?? "MANUAL");
-  const [lines, setLines] = useState<EditLine[]>(initial?.lines?.length ? initial.lines.map((l: any) => ({
-    key: ++lineKey, account: l.account, customer: l.customer, supplier: l.supplier, description: l.description ?? "",
-    debit: toNumber(l.debit) ? l.debit : "", credit: toNumber(l.credit) ? l.credit : "", customer_name: l.customer_name, supplier_name: l.supplier_name,
-  })) : [newLine(), newLine()]);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
+  const defaults: JournalValues = {
+    date: initial?.date ?? todayIn(session?.organization?.timezone), narration: initial?.narration ?? "", source: initial?.source ?? "MANUAL",
+    lines: initial?.lines?.length ? initial.lines.map((l: any): EditLine => ({
+      account: l.account, customer: l.customer, supplier: l.supplier, description: l.description ?? "",
+      debit: toNumber(l.debit) ? l.debit : "", credit: toNumber(l.credit) ? l.credit : "", customer_name: l.customer_name, supplier_name: l.supplier_name,
+    })) : [newLine(), newLine()],
+  };
 
-  const update = (key: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-  const totalDebit = round2(lines.reduce((s, l) => s + toNumber(l.debit), 0));
-  const totalCredit = round2(lines.reduce((s, l) => s + toNumber(l.credit), 0));
-  const difference = round2(totalDebit - totalCredit);
-
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!date) e.date = "Enter the journal date.";
-    const used = lines.filter((l) => l.account || toNumber(l.debit) || toNumber(l.credit));
-    if (used.length < 2) e.lines = "Add at least two lines.";
-    used.forEach((l) => {
-      const i = lines.indexOf(l);
+  const submit = async (v: JournalValues, form: any) => {
+    form.clearErrors();
+    const used = v.lines.map((l, i) => ({ l, i })).filter(({ l }) => l.account || toNumber(l.debit) || toNumber(l.credit));
+    let invalid = false;
+    const fail = (name: string, message: string) => { form.setError(name, { type: "manual", message }); invalid = true; };
+    if (used.length < 2) throw new Error("Add at least two lines.");
+    used.forEach(({ l, i }) => {
       const dr = toNumber(l.debit), cr = toNumber(l.credit);
-      if (!l.account) e[`lines.${i}.account`] = "Choose an account.";
-      if (dr < 0 || cr < 0) e[`lines.${i}.amount`] = "Amounts cannot be negative.";
-      else if ((dr > 0) === (cr > 0)) e[`lines.${i}.amount`] = "Enter either a debit or a credit.";
+      if (!l.account) fail(`lines.${i}.account`, "Choose an account.");
+      if (dr < 0 || cr < 0) fail(`lines.${i}.credit`, "Amounts cannot be negative.");
+      else if ((dr > 0) === (cr > 0)) fail(`lines.${i}.credit`, "Enter either a debit or a credit.");
       const key = l.account ? systemKey.get(l.account) : "";
-      if (key === "RECEIVABLE" && !l.customer) e[`lines.${i}.party`] = "Choose the customer.";
-      if (key === "PAYABLE" && !l.supplier) e[`lines.${i}.party`] = "Choose the supplier.";
+      if (key === "RECEIVABLE" && !l.customer) fail(`lines.${i}.customer`, "Choose the customer.");
+      if (key === "PAYABLE" && !l.supplier) fail(`lines.${i}.supplier`, "Choose the supplier.");
     });
-    setErrors(e);
-    if (Object.keys(e).length) { toast.error(e.lines ?? "Fix the highlighted lines."); return; }
-    setSaving(true);
+    if (invalid) throw new Error("Fix the highlighted lines.");
     const body = {
-      date, narration, source,
-      lines: used.map((l) => {
+      date: v.date, narration: v.narration, source: v.source,
+      lines: used.map(({ l }) => {
         const key = l.account ? systemKey.get(l.account) : "";
         return {
           account: l.account, debit: toNumber(l.debit) ? l.debit : "0", credit: toNumber(l.credit) ? l.credit : "0", description: l.description,
@@ -147,17 +219,10 @@ function JournalFormBody({ initial }: { initial?: any }) {
         };
       }),
     };
-    try {
-      const { data } = initial ? await api.patch(`/journals/${initial.id}/`, body) : await api.post("/journals/", body);
-      queryClient.invalidateQueries({ queryKey: ["journals"] });
-      toast.success("Draft journal saved");
-      navigate(`${BASE}/${data.id}`);
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+    const { data } = initial ? await api.patch(`/journals/${initial.id}/`, body) : await api.post("/journals/", body);
+    queryClient.invalidateQueries({ queryKey: ["journals"] });
+    toast.success("Draft journal saved");
+    navigate(`${BASE}/${data.id}`);
   };
 
   return (
@@ -165,95 +230,15 @@ function JournalFormBody({ initial }: { initial?: any }) {
       <PageHeader title={initial ? `Edit draft journal #${initial.id}` : "New journal"}
         back={{ to: initial ? `${BASE}/${initial.id}` : BASE, label: initial ? "Journal" : "Journals" }}
         subtitle="Saved as a draft. Posting checks that debits equal credits and that the period is open." />
-      <div className="space-y-4">
-        <Panel title="Journal">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Date" required error={errors.date}><DatePicker value={date} onChange={setDate} invalid={!!errors.date} /></Field>
-            <Field label="Type" required error={errors.source}>
-              <Select value={source} onChange={(e) => setSource(e.target.value)}>
-                <option value="MANUAL">Manual journal</option>
-                <option value="OPENING">Opening balance</option>
-              </Select>
-            </Field>
-            <Field label="Narration" error={errors.narration} className="sm:col-span-2">
-              <Textarea value={narration} onChange={(e) => setNarration(e.target.value)} rows={2} />
-            </Field>
-          </div>
-        </Panel>
-        <Panel title="Lines" actions={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setLines((ls) => [...ls, newLine()])}>Add line</Button>}>
-          {errors.lines && <Alert tone="error" className="m-4">{errors.lines}</Alert>}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                <tr>
-                  <th className="w-8 px-3 py-2">#</th><th className="w-[260px] px-3 py-2">Account</th><th className="w-[220px] px-3 py-2">Party</th>
-                  <th className="w-32 px-3 py-2 text-right">Debit</th><th className="w-32 px-3 py-2 text-right">Credit</th>
-                  <th className="px-3 py-2">Description</th><th className="w-10 px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((l, i) => {
-                  const key = l.account ? systemKey.get(l.account) : "";
-                  const lineErr = errors[`lines.${i}.amount`] ?? errors[`lines.${i}.debit`] ?? errors[`lines.${i}.credit`] ?? errors[`lines.${i}.non_field_errors`] ?? errors[`lines.${i}`];
-                  return (
-                    <tr key={l.key} className="border-b border-line align-top">
-                      <td className="px-3 py-1.5 pt-3 text-slate-400">{i + 1}</td>
-                      <td className="px-3 py-1.5">
-                        <EntitySelect resource="accounts" params={{ is_group: "false", is_active: "true" }} value={l.account}
-                          invalid={!!errors[`lines.${i}.account`]}
-                          onChange={(account) => update(l.key, { account, customer: null, supplier: null })} placeholder="Account…" />
-                        {errors[`lines.${i}.account`] && <p className="mt-0.5 text-xs text-red-600">{errors[`lines.${i}.account`]}</p>}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        {key === "RECEIVABLE" ? (
-                          <EntitySelect resource="customers" value={l.customer} initialLabel={l.customer_name ?? undefined} placeholder="Customer…"
-                            invalid={!!errors[`lines.${i}.party`] || !!errors[`lines.${i}.customer`]} onChange={(customer) => update(l.key, { customer })} />
-                        ) : key === "PAYABLE" ? (
-                          <EntitySelect resource="suppliers" value={l.supplier} initialLabel={l.supplier_name ?? undefined} placeholder="Supplier…"
-                            invalid={!!errors[`lines.${i}.party`] || !!errors[`lines.${i}.supplier`]} onChange={(supplier) => update(l.key, { supplier })} />
-                        ) : <span className="block pt-1.5 text-xs text-slate-400">Not required</span>}
-                        {(errors[`lines.${i}.party`] ?? errors[`lines.${i}.customer`] ?? errors[`lines.${i}.supplier`]) &&
-                          <p className="mt-0.5 text-xs text-red-600">{errors[`lines.${i}.party`] ?? errors[`lines.${i}.customer`] ?? errors[`lines.${i}.supplier`]}</p>}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <NumberInput aria-label={`Debit line ${i + 1}`} value={l.debit} invalid={!!lineErr}
-                          onChange={(e) => update(l.key, { debit: e.target.value, ...(e.target.value ? { credit: "" } : {}) })} />
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <NumberInput aria-label={`Credit line ${i + 1}`} value={l.credit} invalid={!!lineErr}
-                          onChange={(e) => update(l.key, { credit: e.target.value, ...(e.target.value ? { debit: "" } : {}) })} />
-                        {lineErr && <p className="mt-0.5 text-xs text-red-600">{lineErr}</p>}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <Input aria-label={`Description line ${i + 1}`} value={l.description} onChange={(e) => update(l.key, { description: e.target.value })} />
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <Button size="sm" variant="ghost" aria-label={`Remove line ${i + 1}`} disabled={lines.length <= 2}
-                          onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}><X className="h-3.5 w-3.5" /></Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot className="text-[13px]">
-                <tr className="font-semibold">
-                  <td colSpan={3} className="px-3 py-2 text-right">Total</td>
-                  <td className="num px-3 py-2">{formatAmount(totalDebit)}</td>
-                  <td className="num px-3 py-2">{formatAmount(totalCredit)}</td>
-                  <td colSpan={2} className={cn("px-3 py-2", difference === 0 ? "text-emerald-700" : "text-red-700")}>
-                    {difference === 0 ? (totalDebit ? "Balanced" : "") : `Difference ${formatAmount(Math.abs(difference))} (${difference > 0 ? "debit" : "credit"} side higher)`}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          <p className="px-4 py-2 text-xs text-slate-500">Lines on accounts receivable or payable must name the customer or supplier. A draft may be unbalanced; posting requires debits to equal credits.</p>
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={submit}>Save draft</Button>
-        </div>
-      </div>
+      <BaseForm<JournalValues> defaultValues={defaults} onSubmit={submit} submitLabel="Save draft" onCancel={() => navigate(-1)}>
+        <FormSection title="Journal">
+          <FormField name="date" label="Date" type="date" required />
+          <FormField name="source" label="Type" type="select" required emptyOption={false}
+            options={[{ value: "MANUAL", label: "Manual journal" }, { value: "OPENING", label: "Opening balance" }]} />
+          <FormField name="narration" label="Narration" type="textarea" rows={2} span={2} />
+        </FormSection>
+        <JournalLinesEditor systemKey={systemKey} />
+      </BaseForm>
     </>
   );
 }
@@ -342,44 +327,18 @@ export function JournalDetail() {
           ]} />
         </Panel>
         <Panel title="Lines">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                <tr>
-                  <th className="w-8 px-3 py-2">#</th><th className="px-3 py-2">Account</th><th className="px-3 py-2">Party</th>
-                  <th className="px-3 py-2">Description</th><th className="px-3 py-2 text-right">Debit</th><th className="px-3 py-2 text-right">Credit</th>
-                  <th className="px-3 py-2">Cleared</th>
-                </tr>
-              </thead>
-              <tbody>
-                {j.lines.map((l: any) => (
-                  <tr key={l.id} className="border-b border-line">
-                    <td className="px-3 py-1.5 text-slate-400">{l.line_no}</td>
-                    <td className="px-3 py-1.5">
-                      {can("accounting.view") ? <Link className="link" to={`/finance/accounts/${l.account}`}>{l.account_code} {l.account_name}</Link>
-                        : <>{l.account_code} {l.account_name}</>}
-                    </td>
-                    <td className="px-3 py-1.5">
-                      {l.customer ? <Link className="link" to={`/contacts/customers/${l.customer}`}>{l.customer_name}</Link>
-                        : l.supplier ? <Link className="link" to={`/contacts/suppliers/${l.supplier}`}>{l.supplier_name}</Link> : <span className="text-slate-300">–</span>}
-                    </td>
-                    <td className="px-3 py-1.5">{l.description || <span className="text-slate-300">–</span>}</td>
-                    <td className="num px-3 py-1.5">{toNumber(l.debit) ? formatAmount(l.debit) : ""}</td>
-                    <td className="num px-3 py-1.5">{toNumber(l.credit) ? formatAmount(l.credit) : ""}</td>
-                    <td className="px-3 py-1.5">{l.cleared_date ? <DateText value={l.cleared_date} /> : ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td colSpan={4} className="px-3 py-2 text-right">Total</td>
-                  <td className="num px-3 py-2">{formatAmount(j.total_debit)}</td>
-                  <td className="num px-3 py-2">{formatAmount(j.total_credit)}</td>
-                  <td />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+          <BaseTable rows={j.lines} minWidth={760} footer columns={[
+            col.custom<any>("line_no", "#", (l) => <span className="text-slate-400">{l.line_no}</span>, { width: 32 }),
+            col.custom<any>("account", "Account", (l) => (can("accounting.view")
+              ? <Link className="link" to={`/finance/accounts/${l.account}`}>{l.account_code} {l.account_name}</Link>
+              : <>{l.account_code} {l.account_name}</>)),
+            col.custom<any>("party", "Party", (l) => (l.customer ? <Link className="link" to={`/contacts/customers/${l.customer}`}>{l.customer_name}</Link>
+              : l.supplier ? <Link className="link" to={`/contacts/suppliers/${l.supplier}`}>{l.supplier_name}</Link> : <span className="text-slate-300">–</span>)),
+            col.custom<any>("description", "Description", (l) => l.description || <span className="text-slate-300">–</span>, { footer: <span className="block text-right">Total</span> }),
+            col.money<any>("debit", "Debit", { render: (l) => (toNumber(l.debit) ? formatAmount(l.debit) : ""), footer: formatAmount(j.total_debit) }),
+            col.money<any>("credit", "Credit", { render: (l) => (toNumber(l.credit) ? formatAmount(l.credit) : ""), footer: formatAmount(j.total_credit) }),
+            col.date<any>("cleared_date", "Cleared"),
+          ]} />
         </Panel>
         <DocumentTimeline resource="journals" id={j.id} />
       </div>

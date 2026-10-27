@@ -1,12 +1,11 @@
 import { Send, Trash2 } from "lucide-react";
+import { col, ResourceList } from "@/components/table";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { DocumentLines } from "@/components/document/DocumentLines";
 import { PrintButton } from "@/components/document/PrintButton";
 import { ReverseAction } from "@/components/document/ReverseAction";
@@ -15,7 +14,7 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
-import { formatAmount, formatQty } from "@/utils/format";
+import { formatAmount } from "@/utils/format";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export function DeliveryList() {
@@ -26,9 +25,9 @@ export function DeliveryList() {
         exportUrl="/deliveries/export/"
         filters={[{ type: "select", name: "status", label: "Status", options: [{ value: "DRAFT", label: "Draft" }, { value: "POSTED", label: "Dispatched" }, { value: "REVERSED", label: "Reversed" }] },
           { type: "entity", name: "customer", label: "Customer", resource: "customers" }]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Delivery", { sortable: true }),
-          col.date("date", "Date", ctx, { sortable: true }),
+          col.date("date", "Date", { sortable: true }),
           col.text("order_number", "Sales order"),
           col.text("customer_name", "Customer", { flex: 2 }),
           col.text("warehouse_name", "Warehouse"),
@@ -88,9 +87,9 @@ export function DeliveryDetail() {
         </Panel>
         <Panel title="Items">
           <DocumentLines showPricing={false} lines={d.lines.map((l: any) => ({ ...l, product_name: l.product_name, sku: l.sku }))} extra={[
-            { key: "ordered_quantity", label: "Ordered", align: "right", render: (l) => formatQty(l.ordered_quantity) },
-            { key: "unit_cost", label: "Unit cost (FIFO)", align: "right", render: (l) => (d.status === "DRAFT" ? "–" : formatAmount(l.unit_cost)) },
-            { key: "cost_amount", label: "Cost", align: "right", render: (l) => (d.status === "DRAFT" ? "–" : formatAmount(l.cost_amount)) },
+            col.qty("ordered_quantity", "Ordered"),
+            col.custom("unit_cost", "Unit cost (FIFO)", (l) => (d.status === "DRAFT" ? "–" : formatAmount(l.unit_cost)), { align: "right" }),
+            col.custom("cost_amount", "Cost", (l) => (d.status === "DRAFT" ? "–" : formatAmount(l.cost_amount)), { align: "right" }),
           ]} />
         </Panel>
         <DocumentTimeline resource="deliveries" id={d.id} />

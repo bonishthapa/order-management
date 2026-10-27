@@ -3,26 +3,21 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction, useOptions } from "@/api/hooks";
-import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { Attachments } from "@/components/document/Attachments";
 import { PrintButton } from "@/components/document/PrintButton";
 import { ReverseAction } from "@/components/document/ReverseAction";
 import { DocumentTimeline } from "@/components/document/Timeline";
-import { EntitySelect } from "@/components/forms/EntitySelect";
-import { PaymentFields, useMethodRequiresReference } from "@/components/forms/PaymentFields";
+import { BaseForm, FormField, FormSection, PaymentMethodFields, useFormContext, useWatch } from "@/components/form";
+import { ResourceList, col } from "@/components/table";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Select, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, formatDateTime, formatPercent, toNumber } from "@/utils/format";
 
@@ -53,9 +48,9 @@ export function ExpenseList() {
           { type: "select", name: "status", label: "Status", options: EXPENSE_STATUSES },
           { type: "select", name: "category", label: "Category", options: (categories.data ?? []).map((c) => ({ value: String(c.id), label: c.name })) },
         ]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Expense", { sortable: true }),
-          col.date("date", "Date", ctx, { sortable: true }),
+          col.date("date", "Date", { sortable: true }),
           col.text("category_name", "Category"),
           col.text("payee", "Payee", { flex: 2 }),
           col.text("paid_from_account_name", "Paid from", { flex: 2 }),
@@ -85,56 +80,57 @@ export function ExpenseForm() {
   return <ExpenseFormBody key={id ?? "new"} initial={doc} />;
 }
 
+interface ExpenseValues {
+  category: number | null; date: string; payee: string; supplier: number | null; amount: string; tax_rate: number | null;
+  payment_method: number | null; paid_from_account: number | null; reference: string; description: string;
+}
+
+/** Category hint (posting account) and supplier → payee prefill; both read the live form values. */
+function CategoryAndSupplier({ categories, supplierName }: { categories: ExpenseCategory[]; supplierName?: string }) {
+  const { getValues, setValue } = useFormContext<ExpenseValues>();
+  const category = useWatch<ExpenseValues, "category">({ name: "category" });
+  const selected = categories.find((c) => c.id === category);
+  return (
+    <>
+      <FormField name="category" label="Category" type="select" required hint={selected ? `Posts to ${selected.account_name}` : undefined}
+        options={categories.filter((c) => c.is_active || c.id === category).map((c) => ({ value: c.id, label: c.name }))} />
+      <FormField name="date" label="Date" type="date" required />
+      <FormField name="payee" label="Payee" required span={2} />
+      <FormField name="supplier" label="Supplier (optional)" type="entity" resource="suppliers" params={{ is_active: "true" }} span={2}
+        placeholder="No supplier" initialLabel={supplierName} hint="Link the expense to a supplier for reporting. It does not create a payable."
+        onValueChange={(_, item) => { if (item && !getValues("payee").trim()) setValue("payee", item.name, { shouldDirty: true }); }} />
+    </>
+  );
+}
+
 function ExpenseFormBody({ initial }: { initial?: any }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAuth();
   const categories = useOptions<ExpenseCategory>("expense-categories");
   const taxes = useOptions<TaxRate>("tax-rates");
-  const [category, setCategory] = useState<number | null>(initial?.category ?? null);
-  const [date, setDate] = useState<string>(initial?.date ?? todayIn(session?.organization?.timezone));
-  const [payee, setPayee] = useState<string>(initial?.payee ?? "");
-  const [supplier, setSupplier] = useState<number | null>(initial?.supplier ?? null);
-  const [amount, setAmount] = useState<string>(initial?.amount ?? "");
-  const [taxRate, setTaxRate] = useState<number | null>(initial?.tax_rate ?? null);
-  const [method, setMethod] = useState<number | null>(initial?.payment_method ?? null);
-  const [account, setAccount] = useState<number | null>(initial?.paid_from_account ?? null);
-  const [reference, setReference] = useState<string>(initial?.reference ?? "");
-  const [description, setDescription] = useState<string>(initial?.description ?? "");
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState<null | "save" | "submit">(null);
-  const requiresRef = useMethodRequiresReference(method);
-  const activeTaxes = (taxes.data ?? []).filter((t) => t.is_active || t.id === taxRate);
-  const activeCategories = (categories.data ?? []).filter((c) => c.is_active || c.id === category);
-  const selectedCategory = categories.data?.find((c) => c.id === category);
+  const defaults: ExpenseValues = {
+    category: initial?.category ?? null, date: initial?.date ?? todayIn(session?.organization?.timezone), payee: initial?.payee ?? "",
+    supplier: initial?.supplier ?? null, amount: initial?.amount ?? "", tax_rate: initial?.tax_rate ?? null,
+    payment_method: initial?.payment_method ?? null, paid_from_account: initial?.paid_from_account ?? null,
+    reference: initial?.reference ?? "", description: initial?.description ?? "",
+  };
 
-  const save = async (then: "save" | "submit") => {
-    const e: Record<string, string> = {};
-    if (!category) e.category = "Choose a category.";
-    if (!date) e.date = "Enter the expense date.";
-    if (!payee.trim()) e.payee = "Enter who was paid.";
-    if (!(toNumber(amount) > 0)) e.amount = "Enter an amount greater than zero.";
-    if (!method) e.method = "Choose a payment method.";
-    if (!account) e.account = "Choose the cash or bank account the money was paid from.";
-    if (requiresRef && !reference.trim()) e.reference = "This payment method needs a transaction reference.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(then);
-    const body = { category, date, payee: payee.trim(), supplier, amount, tax_rate: taxRate, payment_method: method, paid_from_account: account,
-      reference, description };
-    try {
-      let { data } = initial ? await api.patch(`/expenses/${initial.id}/`, body) : await api.post("/expenses/", body);
-      if (then === "submit") data = (await api.post(`/expenses/${data.id}/submit/`)).data;
-      queryClient.invalidateQueries({ queryKey: ["expenses"] });
-      toast.success(then === "submit" ? "Expense submitted for approval" : `Expense saved · total ${formatAmount(data.total)}`);
-      navigate(`${BASE}/${data.id}`);
-    } catch (err) {
-      const fe = fieldErrors(err);
-      setErrors({ ...fe, method: fe.payment_method, account: fe.paid_from_account });
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(null);
+  const submit = async (v: ExpenseValues, _form: unknown, intent: string) => {
+    const body = { ...v, payee: v.payee.trim() };
+    let { data } = initial ? await api.patch(`/expenses/${initial.id}/`, body) : await api.post("/expenses/", body);
+    queryClient.invalidateQueries({ queryKey: ["expenses"] });
+    if (intent === "submit") {
+      try {
+        data = (await api.post(`/expenses/${data.id}/submit/`)).data;
+      } catch (e) {
+        toast.error(`Saved as draft, but not submitted: ${errorMessage(e)}`);
+        navigate(`${BASE}/${data.id}`);
+        return;
+      }
     }
+    toast.success(intent === "submit" ? "Expense submitted for approval" : `Expense saved · total ${formatAmount(data.total)}`);
+    navigate(`${BASE}/${data.id}`);
   };
 
   return (
@@ -143,45 +139,19 @@ function ExpenseFormBody({ initial }: { initial?: any }) {
         back={{ to: initial ? `${BASE}/${initial.id}` : BASE, label: initial ? initial.number || "Expense" : "Expenses" }}
         subtitle="Approval posts the expense: debit the category's expense account (and input VAT), credit the cash/bank account." />
       {initial?.status === "REJECTED" && <Alert tone="warning" className="mb-4" title="Rejected">{initial.rejection_reason} Saving returns the expense to draft.</Alert>}
-      <div className="space-y-4">
-        <Panel title="Expense">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Category" required error={errors.category} hint={selectedCategory ? `Posts to ${selectedCategory.account_name}` : undefined}>
-              <Select value={category ?? ""} onChange={(e) => setCategory(e.target.value ? Number(e.target.value) : null)} invalid={!!errors.category}>
-                <option value="">Choose…</option>
-                {activeCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
-            </Field>
-            <Field label="Date" required error={errors.date}><DatePicker value={date} onChange={setDate} invalid={!!errors.date} /></Field>
-            <Field label="Payee" required error={errors.payee} className="lg:col-span-2">
-              <Input value={payee} onChange={(e) => setPayee(e.target.value)} invalid={!!errors.payee} />
-            </Field>
-            <Field label="Supplier (optional)" error={errors.supplier} className="lg:col-span-2" hint="Link the expense to a supplier for reporting. It does not create a payable.">
-              <EntitySelect resource="suppliers" params={{ is_active: "true" }} value={supplier} initialLabel={initial?.supplier_name}
-                onChange={(sid, item) => { setSupplier(sid); if (item && !payee.trim()) setPayee(item.name); }} placeholder="No supplier" />
-            </Field>
-            <Field label="Amount before tax" required error={errors.amount}>
-              <NumberInput value={amount} onChange={(e) => setAmount(e.target.value)} invalid={!!errors.amount} />
-            </Field>
-            <Field label="Tax" error={errors.tax_rate}>
-              <Select value={taxRate ?? ""} onChange={(e) => setTaxRate(e.target.value ? Number(e.target.value) : null)}>
-                <option value="">No tax</option>
-                {activeTaxes.map((t) => <option key={t.id} value={t.id}>{t.name} ({formatPercent(t.rate)})</option>)}
-              </Select>
-            </Field>
-          </div>
-        </Panel>
-        <Panel title="Payment">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <PaymentFields method={method} account={account} onMethod={setMethod} onAccount={setAccount} accountLabel="Paid from" errors={errors} />
-            <Field label="Reference" required={requiresRef} error={errors.reference} hint="Bill, cheque or transfer reference.">
-              <Input value={reference} onChange={(e) => setReference(e.target.value)} invalid={!!errors.reference} />
-            </Field>
-            <Field label="Description" error={errors.description} className="sm:col-span-2 lg:col-span-4">
-              <Textarea value={description} onChange={(e) => setDescription(e.target.value)} />
-            </Field>
-          </div>
-        </Panel>
+      <BaseForm<ExpenseValues> defaultValues={defaults} onSubmit={submit} onCancel={() => navigate(-1)}
+        submitActions={[{ key: "save", label: "Save draft" }, { key: "submit", label: "Save and submit", primary: true }]}>
+        <FormSection title="Expense">
+          <CategoryAndSupplier categories={categories.data ?? []} supplierName={initial?.supplier_name ?? undefined} />
+          <FormField name="amount" label="Amount before tax" type="money" required
+            rules={{ validate: (v: string) => toNumber(v) > 0 || "Enter an amount greater than zero." }} />
+          <FormField name="tax_rate" label="Tax" type="select" emptyOption="No tax"
+            options={(taxes.data ?? []).filter((t) => t.is_active || t.id === initial?.tax_rate).map((t) => ({ value: t.id, label: `${t.name} (${formatPercent(t.rate)})` }))} />
+        </FormSection>
+        <FormSection title="Payment">
+          <PaymentMethodFields accountField="paid_from_account" accountLabel="Paid from" />
+          <FormField name="description" label="Description" type="textarea" span={4} />
+        </FormSection>
         {initial && (
           <Panel title="Saved totals">
             <KeyValues columns={3} items={[
@@ -192,13 +162,7 @@ function ExpenseFormBody({ initial }: { initial?: any }) {
             <p className="px-4 pb-3 text-xs text-slate-500">Tax and total are recalculated by the server when you save.</p>
           </Panel>
         )}
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button loading={saving === "save"} disabled={!!saving} onClick={() => save("save")}>Save draft</Button>
-          <Button variant="primary" icon={<Send className="h-3.5 w-3.5" />} loading={saving === "submit"} disabled={!!saving}
-            onClick={() => save("submit")}>Save and submit</Button>
-        </div>
-      </div>
+      </BaseForm>
     </>
   );
 }

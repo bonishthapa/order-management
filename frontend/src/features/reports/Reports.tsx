@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { BaseTable, col, ExportMenu, PeriodFilter, type TableColumn } from "@/components/table";
 import { FileBarChart2, Info } from "lucide-react";
-import { Fragment, useMemo } from "react";
+import { useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/api/client";
@@ -8,8 +9,6 @@ import { cleanParams, useOptions } from "@/api/hooks";
 import { useFiscalYear } from "@/app/FiscalYearContext";
 import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
-import { ExportMenu } from "@/components/data/ExportMenu";
-import { PeriodFilter } from "@/components/data/Filters";
 import { EntitySelect } from "@/components/forms/EntitySelect";
 import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
 import { Select } from "@/components/ui/Input";
@@ -210,67 +209,34 @@ export function ReportViewer() {
             </Panel>
           )}
           <Panel>
-            {report.data.rows.length === 0 ? <EmptyState title="No records for this selection" description="Try a different period or filter." /> : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
-                  <thead className="sticky top-0 border-b border-line bg-surface-muted text-left text-xs font-semibold text-slate-500">
-                    <tr>{columns.map((c) => <th key={c.key} className={cn("whitespace-nowrap px-3 py-2", isNumeric(c) && "text-right")}>{c.label}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {report.data.rows.map((row: any, i: number) => (
-                      <tr key={i} className={cn("border-b border-line last:border-0",
-                        row.style === "heading" && "bg-surface-muted font-semibold text-slate-800",
-                        row.style === "subtotal" && "font-medium", (row.style === "total" || row.style === "grand") && "font-semibold",
-                        row.style === "grand" && "border-t-2 border-slate-400")}>
-                        {columns.map((c) => {
-                          const href = linkFor(c, row);
-                          const text = cellValue(c, row, dateMode);
-                          return (
-                            <td key={c.key} className={cn("px-3 py-1.5", isNumeric(c) && "num whitespace-nowrap", c.type === "date" && "whitespace-nowrap")}>
-                              {href ? <Link className="hover:text-brand-700 hover:underline" to={href}>{text}</Link>
-                                : c.key === columns[0].key && row.style && !text && row.label && !columns.some((x) => x.key === "label") ? row.label : text}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                  {report.data.totals && Object.keys(report.data.totals).length > 0 && (
-                    <tfoot className="border-t-2 border-slate-300 bg-surface-muted font-semibold">
-                      <tr>{columns.map((c, i) => (
-                        <td key={c.key} className={cn("px-3 py-2", isNumeric(c) && "num whitespace-nowrap")}>
-                          {i === 0 ? "Total" : report.data.totals[c.key] !== undefined ? cellValue(c, report.data.totals, dateMode) : ""}
-                        </td>
-                      ))}</tr>
-                    </tfoot>
-                  )}
-                </table>
-              </div>
-            )}
+            <BaseTable rows={report.data.rows} stickyHeader footer={!!report.data.totals && Object.keys(report.data.totals).length > 0}
+              empty={{ title: "No records for this selection", description: "Try a different period or filter." }}
+              rowClassName={(row: any) => cn(row.style === "heading" && "bg-surface-muted font-semibold text-slate-800",
+                row.style === "subtotal" && "font-medium", (row.style === "total" || row.style === "grand") && "font-semibold",
+                row.style === "grand" && "border-t-2 border-slate-400")}
+              columns={columns.map((c, i): TableColumn => ({
+                key: c.key, header: c.label, align: isNumeric(c) ? "right" : undefined,
+                render: (row: any) => {
+                  const href = linkFor(c, row);
+                  const text = cellValue(c, row, dateMode);
+                  if (href) return <Link className="hover:text-brand-700 hover:underline" to={href}>{text}</Link>;
+                  return i === 0 && row.style && !text && row.label && !columns.some((x) => x.key === "label") ? row.label : text;
+                },
+                footer: i === 0 ? "Total" : report.data.totals?.[c.key] !== undefined ? cellValue(c, report.data.totals, dateMode) : "",
+              }))} />
           </Panel>
           {report.data.details && report.data.details.length > 0 && (
             <Panel title="Open documents" className="mt-4">
-              <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
-                  <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                    <tr><th className="px-3 py-2">Document</th><th className="px-3 py-2">Party</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Due</th>
-                      <th className="px-3 py-2 text-right">Days overdue</th><th className="px-3 py-2 text-right">Total</th><th className="px-3 py-2 text-right">Outstanding</th></tr>
-                  </thead>
-                  <tbody>{report.data.details.map((d: any) => (
-                    <Fragment key={d.id}>
-                      <tr className="border-b border-line">
-                        <td className="px-3 py-1.5"><Link className="link" to={`${slug === "payable-aging" ? "/purchases/bills" : "/sales/invoices"}/${d.id}`}>{d.number}</Link></td>
-                        <td className="px-3 py-1.5">{d.party_name}</td>
-                        <td className="px-3 py-1.5"><DateText value={d.date} /></td>
-                        <td className="px-3 py-1.5"><DateText value={d.due_date} /></td>
-                        <td className={cn("num px-3 py-1.5", d.days_overdue > 90 && "text-red-700")}>{d.days_overdue}</td>
-                        <td className="num px-3 py-1.5">{formatAmount(d.total)}</td>
-                        <td className="num px-3 py-1.5">{formatAmount(d.outstanding)}</td>
-                      </tr>
-                    </Fragment>
-                  ))}</tbody>
-                </table>
-              </div>
+              <BaseTable rows={report.data.details} density="compact" columns={[
+                col.custom("number", "Document", (d: any) => (
+                  <Link className="link" to={`${slug === "payable-aging" ? "/purchases/bills" : "/sales/invoices"}/${d.id}`}>{d.number}</Link>)),
+                col.text("party_name", "Party"),
+                col.date("date", "Date"),
+                col.date("due_date", "Due"),
+                col.custom("days_overdue", "Days overdue", (d: any) => <span className={cn(d.days_overdue > 90 && "text-red-700")}>{d.days_overdue}</span>, { align: "right" }),
+                col.money("total", "Total"),
+                col.money("outstanding", "Outstanding"),
+              ]} />
             </Panel>
           )}
           {report.data.notes?.map((n: string) => <p key={n} className="mt-2 text-xs text-amber-700">{n}</p>)}

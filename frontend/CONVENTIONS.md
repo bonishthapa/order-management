@@ -25,11 +25,42 @@ These rules keep every module consistent. Read the reference implementation in
 - Display dates with `<DateText value={x.date} bs={x.date_bs} />`; in grids use `col.date(field, label, ctx)`.
 - Today's business date: `todayIn(organization.timezone)` from `@/calendar/bs` – not `new Date()`.
 
-## Lists
-- Use `ResourceList` (server pagination/sort/filter, URL state, export). `dated` adds fiscal-year and AD/BS range
-  filters (the API resolves `fiscal_year`, `date_from`, `date_to`). Column factories live in `components/data/columns.tsx`.
-- `sortable: true` only on fields the API lists in `ordering_fields`.
-- Export uses `exportUrl="/<resource>/export/"` (`?export=csv|xlsx`).
+## Tables – one way only (`@/components/table`)
+Every table is described with the same `TableColumn` type, built with the `col` helpers:
+`col.text | number | money | qty | percent | date | datetime | status | doc | custom(key, header, render)`.
+Formatting (lakh grouping, AD/BS dates per user preference, status badges, right alignment) is applied centrally.
+
+| Need | Component |
+| --- | --- |
+| Server-paginated list page with search, filters, sorting, export | `<ResourceList resource columns={[...]} dated filters exportUrl detailPath />` |
+| Grid over data you already have / custom paging (AG Grid) | `<DataGrid columns rows ... />` |
+| Any in-page table: document lines, allocations, statements, small lists, editable sheets | `<BaseTable columns rows footer? onRowClick? density? />` |
+
+- Editable tables are BaseTable with `col.custom(...)` cells holding inputs.
+- Totals rows: set `footer` on columns and pass `footer` to BaseTable.
+- `sortable: true` only for fields in the API's `ordering_fields`; use `sortField` when it differs from `key`.
+- Never write `<table>` or import AG Grid in feature code (enforced by `src/__tests__/ui-conventions.test.ts`).
+- Import only from the barrel: `import { BaseTable, ResourceList, col } from "@/components/table"`.
+
+## Forms – one way only (`@/components/form`)
+- Page forms: `<BaseForm defaultValues onSubmit submitLabel onCancel>` with `<FormSection title columns>` blocks of
+  `<FormField name label type required ... />`.
+- Dialog forms: `<FormDialog open onOpenChange title defaultValues onSubmit>` with `<FormGrid>` + `<FormField>`.
+- `FormField` types: `text, email, password, tel, number, money, percent, textarea, select (options), checkbox,
+  date (AD/BS DatePicker), entity (EntitySelect: resource, params, optionLabel), custom (render)`.
+- Name fields with the **API field names**; `onSubmit` just calls the API and throws on failure – BaseForm maps
+  server field errors onto fields (use `errorFieldMap` when names differ), shows other errors, keeps submit state,
+  and warns about unsaved changes on page forms.
+- Several submit buttons: `submitActions={[{ key: "draft", label: "Save draft" }, { key: "post", label: "Post", primary: true }]}`;
+  `onSubmit(values, form, intent)` receives the clicked key.
+- Dialog-specific buttons beside Cancel/Save: `FormDialog footerActions={...}`.
+- Payment method + cash/bank account + reference: `<PaymentMethodFields accountField="deposit_account" />`.
+- Editable table cells inside a form: `CellInput` (`number` for amounts), `CellSelect`, `CellDate`, `CellEntity`, each bound
+  to a field path such as `lines.3.quantity` and showing its own error; allocations: `AllocationField`.
+- Watch values with `useWatch`, read/set with `useFormContext`, line arrays with `useFieldArray` (re-exported from `@/components/form`).
+- Never write `<form>`, `useForm` or import `react-hook-form` in feature code (enforced by the same test).
+- Small inline controls that are not a form (a filter, a single "as of" date, a search box) may use the plain
+  inputs from `components/ui` directly.
 
 ## Visual language
 - Components: `Button` (primary only for the main action of a screen), `Panel`, `PageHeader`, `KeyValues`, `Field`,

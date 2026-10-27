@@ -1,20 +1,19 @@
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useGet } from "@/api/hooks";
 import { DatePicker } from "@/calendar/DatePicker";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { FilterBar, SearchBox } from "@/components/data/Filters";
+import { FormDialog, FormField, FormGrid, useFormContext, useWatch } from "@/components/form";
+import { BaseTable, FilterBar, SearchBox, col, type TableColumn } from "@/components/table";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, EmptyState, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, Select, Textarea } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/Page";
 import { formatAmount, toNumber } from "@/utils/format";
 import { cn } from "@/utils/cn";
@@ -73,12 +72,13 @@ function buildTree(accounts: Account[], type: AccountType): TreeRow[] {
   return rows;
 }
 
-function DebitCredit({ value }: { value: number }) {
-  if (!value) return <><td className="num px-3 py-1.5 text-slate-300">–</td><td className="num px-3 py-1.5 text-slate-300">–</td></>;
-  return value > 0
-    ? <><td className="num px-3 py-1.5">{formatAmount(value)}</td><td className="num px-3 py-1.5" /></>
-    : <><td className="num px-3 py-1.5" /><td className="num px-3 py-1.5">{formatAmount(-value)}</td></>;
-}
+type ChartRow =
+  | { kind: "section"; id: string; label: string; total: number }
+  | { kind: "account"; id: number; row: TreeRow };
+
+const debitOf = (v: number) => (v > 0 ? formatAmount(v) : v === 0 ? <span className="text-slate-300">–</span> : "");
+const creditOf = (v: number) => (v < 0 ? formatAmount(-v) : v === 0 ? <span className="text-slate-300">–</span> : "");
+const amountOf = (r: ChartRow) => (r.kind === "section" ? r.total : r.row.account.is_group ? r.row.rollup : toNumber(r.row.account.balance));
 
 export function AccountsPage() {
   const { can, session } = useAuth();
@@ -105,7 +105,6 @@ export function AccountsPage() {
   const isHidden = (row: TreeRow, rows: TreeRow[]) => {
     if (!showInactive && !row.account.is_active) return true;
     if (term) return !matches(row.account);
-    // hidden when any ancestor is collapsed
     let parent = row.account.parent;
     while (parent) {
       if (collapsed.has(parent)) return true;
@@ -117,6 +116,14 @@ export function AccountsPage() {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
+  });
+
+  const rows: ChartRow[] = sections.flatMap((section) => {
+    const visible = section.rows.filter((r) => !isHidden(r, section.rows));
+    if (!visible.length && term) return [];
+    const total = Math.round(section.rows.filter((r) => r.depth === 0).reduce((s, r) => s + r.rollup, 0) * 100) / 100;
+    return [{ kind: "section" as const, id: section.value, label: section.label, total },
+      ...visible.map((row) => ({ kind: "account" as const, id: row.account.id, row }))];
   });
 
   const remove = async () => {
@@ -133,6 +140,46 @@ export function AccountsPage() {
       setBusy(false);
     }
   };
+
+  const columns: TableColumn<ChartRow>[] = [
+    col.custom("account", "Account", (r) => {
+      if (r.kind === "section") return <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{r.label}</span>;
+      const { account: a, depth, childCount } = r.row;
+      return (
+        <div className="flex items-center gap-1" style={{ paddingLeft: term ? 0 : depth * 18 }}>
+          {a.is_group && childCount > 0 && !term ? (
+            <button type="button" aria-label={collapsed.has(a.id) ? "Expand" : "Collapse"} className="rounded p-0.5 text-slate-400 hover:bg-surface-sunken"
+              onClick={(e) => { e.stopPropagation(); toggle(a.id); }}>
+              {collapsed.has(a.id) ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          ) : <span className="w-[18px]" />}
+          <span className="w-14 shrink-0 tabular-nums text-slate-500">{a.code}</span>
+          <span className={cn(a.is_group ? "font-semibold text-slate-800" : "text-slate-800", !a.is_active && "text-slate-400")}>{a.name}</span>
+        </div>
+      );
+    }),
+    col.custom("flags", "Flags", (r) => r.kind === "account" && (
+      <div className="flex flex-wrap gap-1">
+        {r.row.account.system_key && <Badge tone="blue">System</Badge>}
+        {r.row.account.is_group && <Badge>Group</Badge>}
+        {r.row.account.is_cash && <Badge tone="green">Cash</Badge>}
+        {r.row.account.is_bank && <Badge tone="green">Bank</Badge>}
+        {!r.row.account.is_active && <Badge tone="slate">Inactive</Badge>}
+      </div>
+    )),
+    ...(showBalances ? [
+      col.custom<ChartRow>("debit", "Debit", (r) => debitOf(amountOf(r)), { align: "right", width: 144 }),
+      col.custom<ChartRow>("credit", "Credit", (r) => creditOf(amountOf(r)), { align: "right", width: 144 }),
+    ] : []),
+    ...(canManage ? [col.custom<ChartRow>("actions", "", (r) => r.kind === "account" && (
+      <div className="flex justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+        <Button size="sm" variant="ghost" aria-label={`Edit ${r.row.account.code}`} onClick={() => setEditing(r.row.account)}><Pencil className="h-3.5 w-3.5" /></Button>
+        {!r.row.account.system_key && !r.row.account.has_postings && r.row.childCount === 0 && (
+          <Button size="sm" variant="ghost" aria-label={`Delete ${r.row.account.code}`} onClick={() => setDeleting(r.row.account)}><Trash2 className="h-3.5 w-3.5" /></Button>
+        )}
+      </div>
+    ), { width: 80 })] : []),
+  ];
 
   return (
     <>
@@ -159,72 +206,15 @@ export function AccountsPage() {
         {query.isLoading ? <LoadingBlock /> : query.error ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : !query.data?.length ? (
           <EmptyState title="No accounts" description="The chart of accounts is created with the organisation." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Account</th>
-                  <th className="px-3 py-2">Flags</th>
-                  {showBalances && <><th className="w-36 px-3 py-2 text-right">Debit</th><th className="w-36 px-3 py-2 text-right">Credit</th></>}
-                  {canManage && <th className="w-20 px-3 py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {sections.map((section) => {
-                  const visible = section.rows.filter((r) => !isHidden(r, section.rows));
-                  if (!visible.length && term) return null;
-                  const sectionTotal = section.rows.filter((r) => r.depth === 0).reduce((s, r) => s + r.rollup, 0);
-                  return (
-                    <Fragment key={section.value}>
-                      <tr className="border-b border-line bg-surface-sunken/60">
-                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600" colSpan={2}>{section.label}</th>
-                        {showBalances && <DebitCredit value={Math.round(sectionTotal * 100) / 100} />}
-                        {canManage && <td />}
-                      </tr>
-                      {visible.map(({ account: a, depth, rollup, childCount }) => (
-                        <tr key={a.id} className={cn("border-b border-line hover:bg-surface-muted", !a.is_group && showBalances && "cursor-pointer", !a.is_active && "text-slate-400")}
-                          onClick={() => !a.is_group && showBalances && navigate(`/finance/accounts/${a.id}`)}>
-                          <td className="px-3 py-1.5">
-                            <div className="flex items-center gap-1" style={{ paddingLeft: term ? 0 : depth * 18 }}>
-                              {a.is_group && childCount > 0 && !term ? (
-                                <button type="button" aria-label={collapsed.has(a.id) ? "Expand" : "Collapse"} className="rounded p-0.5 text-slate-400 hover:bg-surface-sunken"
-                                  onClick={(e) => { e.stopPropagation(); toggle(a.id); }}>
-                                  {collapsed.has(a.id) ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                                </button>
-                              ) : <span className="w-[18px]" />}
-                              <span className="w-14 shrink-0 tabular-nums text-slate-500">{a.code}</span>
-                              <span className={cn(a.is_group ? "font-semibold text-slate-800" : "text-slate-800", !a.is_active && "text-slate-400")}>{a.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-1.5">
-                            <div className="flex flex-wrap gap-1">
-                              {a.system_key && <Badge tone="blue">System</Badge>}
-                              {a.is_group && <Badge>Group</Badge>}
-                              {a.is_cash && <Badge tone="green">Cash</Badge>}
-                              {a.is_bank && <Badge tone="green">Bank</Badge>}
-                              {!a.is_active && <Badge tone="slate">Inactive</Badge>}
-                            </div>
-                          </td>
-                          {showBalances && <DebitCredit value={a.is_group ? rollup : toNumber(a.balance)} />}
-                          {canManage && (
-                            <td className="px-3 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex justify-end gap-0.5">
-                                <Button size="sm" variant="ghost" aria-label={`Edit ${a.code}`} onClick={() => setEditing(a)}><Pencil className="h-3.5 w-3.5" /></Button>
-                                {!a.system_key && !a.has_postings && childCount === 0 && (
-                                  <Button size="sm" variant="ghost" aria-label={`Delete ${a.code}`} onClick={() => setDeleting(a)}><Trash2 className="h-3.5 w-3.5" /></Button>
-                                )}
-                              </div>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-            {showBalances && <p className="px-3 py-2 text-xs text-slate-500">Balances include posted entries up to the selected date. Group totals add up the accounts beneath them.</p>}
-          </div>
+          <>
+            <BaseTable<ChartRow> rows={rows} columns={columns} density="compact" minWidth={760} rowKey={(r) => `${r.kind}-${r.id}`}
+              empty={{ title: "No matching accounts", description: "Try another code or name." }}
+              rowClassName={(r) => cn(r.kind === "section" && "bg-surface-sunken/60",
+                r.kind === "account" && !r.row.account.is_active && "text-slate-400",
+                (r.kind === "section" || r.row.account.is_group) && "cursor-default")}
+              onRowClick={showBalances ? (r) => { if (r.kind === "account" && !r.row.account.is_group) navigate(`/finance/accounts/${r.id}`); } : undefined} />
+            {showBalances && <p className="border-t border-line px-3 py-2 text-xs text-slate-500">Balances include posted entries up to the selected date. Group totals add up the accounts beneath them.</p>}
+          </>
         )}
       </div>
       {editing && <AccountDialog account={editing === "new" ? null : editing} accounts={query.data ?? []} onClose={() => setEditing(null)} />}
@@ -250,109 +240,72 @@ function descendantsOf(id: number, accounts: Account[]): Set<number> {
   return out;
 }
 
+/** Fields that depend on each other (type → parent groups, group → no cash/bank, cash ↔ bank). */
+function AccountFields({ account, accounts }: { account: Account | null; accounts: Account[] }) {
+  const { setValue } = useFormContext<AccountValues>();
+  const [type, isGroup, isBank] = useWatch<AccountValues, ["account_type", "is_group", "is_bank"]>({ name: ["account_type", "is_group", "is_bank"] });
+  const system = !!account?.system_key;
+  const locked = !!account?.has_postings;
+  const excluded = account ? descendantsOf(account.id, accounts) : new Set<number>();
+  const parents = accounts.filter((a) => a.is_group && a.account_type === type && !excluded.has(a.id))
+    .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+  const hasChildren = !!account && accounts.some((a) => a.parent === account.id);
+  const clearCashBank = () => { setValue("is_cash", false); setValue("is_bank", false); };
+
+  return (
+    <FormGrid>
+      <FormField name="code" label="Code" required />
+      <FormField name="name" label="Name" required />
+      <FormField name="account_type" label="Type" type="select" required emptyOption={false} disabled={system || locked}
+        options={ACCOUNT_TYPES.map((t) => ({ value: t.value, label: TYPE_SINGULAR[t.value] }))}
+        onValueChange={(t) => { setValue("parent", null); if (t !== "ASSET") clearCashBank(); }} />
+      <FormField name="parent" label="Parent group" type="select" emptyOption="Top level" hint="Only groups of the same type can be parents."
+        options={parents.map((p) => ({ value: p.id, label: `${p.code} ${p.name}` }))} />
+      <FormField name="is_group" label="Group" type="checkbox" span="full" disabled={system || locked || (isGroup && hasChildren)}
+        hint="Group account (organises the chart; cannot be posted to)" onValueChange={(v) => { if (v) clearCashBank(); }} />
+      {type === "ASSET" && !isGroup && <>
+        <FormField name="is_cash" label="Cash" type="checkbox" hint="Cash account" onValueChange={(v) => { if (v) setValue("is_bank", false); }} />
+        <FormField name="is_bank" label="Bank" type="checkbox" hint="Bank account (can be reconciled)" onValueChange={(v) => { if (v) setValue("is_cash", false); }} />
+      </>}
+      {isBank && <>
+        <FormField name="bank_name" label="Bank" />
+        <FormField name="bank_branch" label="Branch" />
+        <FormField name="bank_account_number" label="Account number" span="full" />
+      </>}
+      <FormField name="description" label="Description" type="textarea" rows={2} span="full" />
+      <FormField name="is_active" label="Active" type="checkbox" span="full" disabled={system} hint="Active (inactive accounts cannot receive new postings)" />
+    </FormGrid>
+  );
+}
+
 function AccountDialog({ account, accounts, onClose }: { account: Account | null; accounts: Account[]; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const [v, setV] = useState<AccountValues>(account ? {
+  const system = !!account?.system_key;
+  const defaults: AccountValues = account ? {
     code: account.code, name: account.name, account_type: account.account_type, parent: account.parent, is_group: account.is_group,
     is_cash: account.is_cash, is_bank: account.is_bank, bank_name: account.bank_name, bank_account_number: account.bank_account_number,
     bank_branch: account.bank_branch, description: account.description, is_active: account.is_active,
   } : {
     code: "", name: "", account_type: "ASSET", parent: null, is_group: false, is_cash: false, is_bank: false, bank_name: "",
     bank_account_number: "", bank_branch: "", description: "", is_active: true,
-  });
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const set = <K extends keyof AccountValues>(key: K, value: AccountValues[K]) => setV((prev) => ({ ...prev, [key]: value }));
-  const system = !!account?.system_key;
-  const locked = !!account?.has_postings;
-  const excluded = account ? descendantsOf(account.id, accounts) : new Set<number>();
-  const parents = accounts.filter((a) => a.is_group && a.account_type === v.account_type && !excluded.has(a.id))
-    .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
-  const hasChildren = !!account && accounts.some((a) => a.parent === account.id);
+  };
 
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!v.code.trim()) e.code = "Enter an account code.";
-    if (!v.name.trim()) e.name = "Enter an account name.";
-    if ((v.is_cash || v.is_bank) && v.account_type !== "ASSET") e.is_cash = "Cash and bank accounts are assets.";
-    if ((v.is_cash || v.is_bank) && v.is_group) e.is_cash = "Group accounts cannot be cash or bank accounts.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
+  const submit = async (v: AccountValues) => {
     const body: Record<string, unknown> = { ...v, code: v.code.trim(), name: v.name.trim() };
     if (!v.is_bank) Object.assign(body, { bank_name: "", bank_account_number: "", bank_branch: "" });
     if (system) { delete body.account_type; delete body.is_group; delete body.is_active; }
-    try {
-      if (account) await api.patch(`/accounts/${account.id}/`, body);
-      else await api.post("/accounts/", body);
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      toast.success(account ? `Account ${v.code} updated` : `Account ${v.code} created`);
-      onClose();
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+    if (account) await api.patch(`/accounts/${account.id}/`, body);
+    else await api.post("/accounts/", body);
+    queryClient.invalidateQueries({ queryKey: ["accounts"] });
+    toast.success(account ? `Account ${body.code} updated` : `Account ${body.code} created`);
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={account ? `Edit ${account.code} ${account.name}` : "New account"} size="lg"
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={submit}>{account ? "Save changes" : "Create account"}</Button></>}>
+    <FormDialog<AccountValues> open onOpenChange={(o) => !o && onClose()} title={account ? `Edit ${account.code} ${account.name}` : "New account"}
+      size="lg" submitLabel={account ? "Save changes" : "Create account"} defaultValues={defaults} onSubmit={submit}>
       {system && <Alert tone="info" className="mb-3" title={`System account: ${account?.system_label}`}>Posting rules depend on this account, so its type, group setting and active status are fixed.</Alert>}
-      {!system && locked && <Alert tone="info" className="mb-3">This account has postings: its type cannot change and it cannot become a group.</Alert>}
-      <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-        <Field label="Code" required error={errors.code}><Input value={v.code} onChange={(e) => set("code", e.target.value)} invalid={!!errors.code} /></Field>
-        <Field label="Name" required error={errors.name}><Input value={v.name} onChange={(e) => set("name", e.target.value)} invalid={!!errors.name} /></Field>
-        <Field label="Type" required error={errors.account_type}>
-          <Select value={v.account_type} disabled={system || locked}
-            onChange={(e) => { const t = e.target.value as AccountType; setV((p) => ({ ...p, account_type: t, parent: null, ...(t !== "ASSET" ? { is_cash: false, is_bank: false } : {}) })); }}>
-            {ACCOUNT_TYPES.map((t) => <option key={t.value} value={t.value}>{TYPE_SINGULAR[t.value]}</option>)}
-          </Select>
-        </Field>
-        <Field label="Parent group" error={errors.parent} hint="Only groups of the same type can be parents.">
-          <Select value={v.parent ?? ""} onChange={(e) => set("parent", e.target.value ? Number(e.target.value) : null)} invalid={!!errors.parent}>
-            <option value="">Top level</option>
-            {parents.map((p) => <option key={p.id} value={p.id}>{p.code} {p.name}</option>)}
-          </Select>
-        </Field>
-        <div className="space-y-1.5 sm:col-span-2">
-          <label className="flex items-center gap-2 text-[13px]">
-            <input type="checkbox" className="accent-brand-600" checked={v.is_group} disabled={system || locked || (v.is_group && hasChildren)}
-              onChange={(e) => setV((p) => ({ ...p, is_group: e.target.checked, ...(e.target.checked ? { is_cash: false, is_bank: false } : {}) }))} />
-            Group account (organises the chart; cannot be posted to)
-          </label>
-          {errors.is_group && <p className="text-xs text-red-600">{errors.is_group}</p>}
-          {v.account_type === "ASSET" && !v.is_group && (
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-[13px]">
-                <input type="checkbox" className="accent-brand-600" checked={v.is_cash} onChange={(e) => setV((p) => ({ ...p, is_cash: e.target.checked, ...(e.target.checked ? { is_bank: false } : {}) }))} />
-                Cash account
-              </label>
-              <label className="flex items-center gap-2 text-[13px]">
-                <input type="checkbox" className="accent-brand-600" checked={v.is_bank} onChange={(e) => setV((p) => ({ ...p, is_bank: e.target.checked, ...(e.target.checked ? { is_cash: false } : {}) }))} />
-                Bank account (can be reconciled)
-              </label>
-            </div>
-          )}
-          {(errors.is_cash || errors.is_bank) && <p className="text-xs text-red-600">{errors.is_cash ?? errors.is_bank}</p>}
-        </div>
-        {v.is_bank && <>
-          <Field label="Bank" error={errors.bank_name}><Input value={v.bank_name} onChange={(e) => set("bank_name", e.target.value)} /></Field>
-          <Field label="Branch" error={errors.bank_branch}><Input value={v.bank_branch} onChange={(e) => set("bank_branch", e.target.value)} /></Field>
-          <Field label="Account number" error={errors.bank_account_number} className="sm:col-span-2">
-            <Input value={v.bank_account_number} onChange={(e) => set("bank_account_number", e.target.value)} />
-          </Field>
-        </>}
-        <Field label="Description" error={errors.description} className="sm:col-span-2">
-          <Textarea value={v.description} onChange={(e) => set("description", e.target.value)} rows={2} />
-        </Field>
-        <label className="flex items-center gap-2 text-[13px] sm:col-span-2">
-          <input type="checkbox" className="accent-brand-600" checked={v.is_active} disabled={system} onChange={(e) => set("is_active", e.target.checked)} />
-          Active (inactive accounts cannot receive new postings)
-        </label>
-        {errors.is_active && <p className="text-xs text-red-600 sm:col-span-2">{errors.is_active}</p>}
-      </div>
-    </Dialog>
+      {!system && account?.has_postings && <Alert tone="info" className="mb-3">This account has postings: its type cannot change and it cannot become a group.</Alert>}
+      <AccountFields account={account} accounts={accounts} />
+    </FormDialog>
   );
 }

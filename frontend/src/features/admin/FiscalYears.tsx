@@ -1,10 +1,9 @@
-import type { ColDef, ICellRendererParams } from "ag-grid-community";
 import { CheckCircle2, Lock, LockOpen, Pencil, Plus, RefreshCw, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useDetail, useGet, useOptions } from "@/api/hooks";
 import type { AccountingPeriod, FiscalYear } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
@@ -12,16 +11,15 @@ import {
   BS_MAX_YEAR, BS_MIN_YEAR, BS_MONTH_NAMES, BSDateError, addDays, adToBs, adToBsString, bsToAd, daysInBsMonth, isoToUtc, todayIn,
   utcToIso, type ISODate,
 } from "@/calendar/bs";
-import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
-import { DataTable } from "@/components/data/DataTable";
-import { col } from "@/components/data/columns";
+import { BaseForm, FormDialog, FormField, FormGrid, FormSection, useFormContext, useWatch } from "@/components/form";
+import { BaseTable, DataGrid, col, type TableColumn } from "@/components/table";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, EmptyState, ErrorState, LoadingBlock, Spinner } from "@/components/ui/Feedback";
 import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Select, Textarea } from "@/components/ui/Input";
+import { NumberInput, Select } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
 import { cn } from "@/utils/cn";
@@ -102,27 +100,23 @@ function useInvalidateFiscal() {
  * List
  * ---------------------------------------------------------------------------------------------- */
 
+const FY_COLUMNS: TableColumn<FiscalYear>[] = [
+  col.custom<FiscalYear>("name", "Fiscal year", (r) => <span className="font-medium text-brand-700">{r.name}</span>, { minWidth: 130, pinned: true }),
+  col.text<FiscalYear>("code", "Code", { minWidth: 100 }),
+  col.custom<FiscalYear>("start_date", "Starts", (r) => <BothDates ad={r.start_date} bs={r.start_date_bs} />, { minWidth: 220 }),
+  col.custom<FiscalYear>("end_date", "Ends", (r) => <BothDates ad={r.end_date} bs={r.end_date_bs} />, { minWidth: 220 }),
+  col.text<FiscalYear>("period_type", "Periods", { minWidth: 150, value: (r) => periodTypeLabel(r.period_type) }),
+  col.status<FiscalYear>("status", "Status", "status_label", { minWidth: 170 }),
+  col.custom<FiscalYear>("opening_balance_status", "Opening balances",
+    (r) => <StatusBadge status={r.opening_balance_status} label={OPENING_LABELS[r.opening_balance_status]} />, { minWidth: 120 }),
+  col.custom<FiscalYear>("closing_status", "Year-end close",
+    (r) => <StatusBadge status={r.closing_status} label={CLOSING_LABELS[r.closing_status]} />, { minWidth: 120 }),
+];
+
 export function FiscalYearList() {
   const { can } = useAuth();
   const navigate = useNavigate();
   const query = useOptions<FiscalYear>("fiscal-years");
-  const columns = useMemo<ColDef[]>(() => [
-    {
-      field: "name", headerName: "Fiscal year", minWidth: 130, pinned: "left",
-      cellRenderer: (p: ICellRendererParams<FiscalYear>) => <span className="font-medium text-brand-700">{p.value}</span>,
-    },
-    col.text("code", "Code", { minWidth: 100, maxWidth: 120 }),
-    { colId: "start", headerName: "Starts", minWidth: 220, cellRenderer: (p: ICellRendererParams<FiscalYear>) => p.data ? <BothDates ad={p.data.start_date} bs={p.data.start_date_bs} /> : null },
-    { colId: "end", headerName: "Ends", minWidth: 220, cellRenderer: (p: ICellRendererParams<FiscalYear>) => p.data ? <BothDates ad={p.data.end_date} bs={p.data.end_date_bs} /> : null },
-    col.text("period_type", "Periods", { minWidth: 150, valueFormatter: (p) => periodTypeLabel(p.value) }),
-    col.status("status", "Status", "status_label", { minWidth: 170, maxWidth: 210 }),
-    col.status("opening_balance_status", "Opening balances", undefined, {
-      cellRenderer: (p: ICellRendererParams<FiscalYear>) => <StatusBadge status={p.value} label={OPENING_LABELS[p.value]} />,
-    }),
-    col.status("closing_status", "Year-end close", undefined, {
-      cellRenderer: (p: ICellRendererParams<FiscalYear>) => <StatusBadge status={p.value} label={CLOSING_LABELS[p.value]} />,
-    }),
-  ], []);
   return (
     <>
       <PageHeader title="Fiscal years"
@@ -131,7 +125,7 @@ export function FiscalYearList() {
           <Button variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => navigate("/admin/fiscal-years/new")}>New fiscal year</Button>
         )} />
       <div className="panel overflow-hidden">
-        <DataTable<FiscalYear> id="admin-fiscal-years" columns={columns} rows={query.data} loading={query.isLoading} error={query.error}
+        <DataGrid<FiscalYear> id="admin-fiscal-years" columns={FY_COLUMNS} rows={query.data} loading={query.isLoading} error={query.error}
           onRetry={() => query.refetch()} onRowClick={(r) => navigate(`/admin/fiscal-years/${r.id}`)}
           empty={{
             title: "No fiscal years yet", description: "Create the first fiscal year before posting any transaction.",
@@ -146,6 +140,15 @@ export function FiscalYearList() {
  * Form (create / edit draft)
  * ---------------------------------------------------------------------------------------------- */
 
+interface FiscalYearValues {
+  name: string;
+  code: string;
+  start_date: string;
+  end_date: string;
+  period_type: PeriodType;
+  notes: string;
+}
+
 export function FiscalYearForm() {
   const { id } = useParams();
   const editing = !!id && id !== "new";
@@ -156,69 +159,10 @@ export function FiscalYearForm() {
 }
 
 function FiscalYearEditor({ existing }: { existing: FiscalYear | null }) {
-  const { session, can } = useAuth();
+  const { can } = useAuth();
   const navigate = useNavigate();
   const invalidate = useInvalidateFiscal();
   const years = useOptions<FiscalYear>("fiscal-years");
-  const tz = session?.organization?.timezone;
-
-  const suggestedBsYear = useMemo(() => {
-    const latest = (years.data ?? []).reduce<FiscalYear | null>((a, b) => (!a || b.end_date > a.end_date ? b : a), null);
-    try {
-      if (latest) {
-        const next = adToBs(addDays(latest.end_date, 1));
-        return next.month >= 4 ? next.year : next.year - 1;
-      }
-      const today = adToBs(todayIn(tz));
-      return today.month >= 4 ? today.year : today.year - 1;
-    } catch {
-      return BS_MIN_YEAR;
-    }
-  }, [years.data, tz]);
-
-  const [name, setName] = useState(existing?.name ?? "");
-  const [code, setCode] = useState(existing?.code ?? "");
-  const [start, setStart] = useState<ISODate | "">(existing?.start_date ?? "");
-  const [end, setEnd] = useState<ISODate | "">(existing?.end_date ?? "");
-  const [periodType, setPeriodType] = useState<PeriodType>((existing?.period_type as PeriodType) ?? "BS_MONTHLY");
-  const [notes, setNotes] = useState(existing?.notes ?? "");
-  const [bsYear, setBsYear] = useState<number | null>(null);
-  const [adYear, setAdYear] = useState("");
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-
-  const fillBsYear = bsYear ?? suggestedBsYear;
-  useEffect(() => {
-    if (!adYear) setAdYear(String(Number(todayIn(tz).slice(0, 4)) + ((years.data?.length ?? 0) > 0 ? 1 : 0)));
-  }, [tz, years.data, adYear]);
-
-  const applyNepali = () => {
-    try {
-      const fy = nepaliFiscalYear(fillBsYear);
-      setStart(fy.start); setEnd(fy.end); setName(fy.code); setCode(fy.code); setPeriodType("BS_MONTHLY");
-      setErrors({});
-    } catch (e) {
-      toast.error(e instanceof BSDateError ? e.message : "That BS year is outside the supported calendar.");
-    }
-  };
-  const applyCalendar = () => {
-    const y = Number(adYear);
-    if (!Number.isInteger(y) || y < 1919 || y > 2043) return toast.error("Enter an AD year between 1919 and 2043.");
-    setStart(`${y}-01-01`); setEnd(`${y}-12-31`); setName(String(y)); setCode(String(y)); setPeriodType("AD_MONTHLY");
-    setErrors({});
-  };
-
-  const preview = useMemo(() => {
-    try {
-      return { periods: start && end ? buildPeriods(start, end, periodType) : [], error: null as string | null };
-    } catch (e) {
-      return { periods: [], error: e instanceof Error ? e.message : "Cannot build periods for these dates." };
-    }
-  }, [start, end, periodType]);
-
-  const overlaps = useMemo(() => (years.data ?? []).filter((fy) => fy.id !== existing?.id && start && end
-    && fy.start_date <= end && fy.end_date >= start), [years.data, start, end, existing]);
-  const length = start && end && end >= start ? daysBetween(start, end) + 1 : null;
 
   if (existing && existing.status !== "DRAFT") {
     return (
@@ -239,127 +183,164 @@ function FiscalYearEditor({ existing }: { existing: FiscalYear | null }) {
     );
   }
 
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!name.trim()) e.name = "Enter a name, e.g. 2083/84.";
-    if (!code.trim()) e.code = "Enter the code used in document numbers.";
-    if (!start) e.start_date = "Choose the first day.";
-    if (!end) e.end_date = "Choose the last day.";
-    if (start && end && end <= start) e.end_date = "The end date must be after the start date.";
-    if (length && length > 400) e.end_date = "A fiscal year cannot be longer than 400 days.";
-    if (overlaps.length) e.end_date = `These dates overlap ${overlaps.map((o) => o.name).join(", ")}.`;
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    const body = { name: name.trim(), code: code.trim(), start_date: start, end_date: end, period_type: periodType, notes };
-    try {
-      const { data } = existing
-        ? await api.patch<FiscalYear>(`/fiscal-years/${existing.id}/`, body)
-        : await api.post<FiscalYear>("/fiscal-years/", body);
-      invalidate();
-      toast.success(existing ? `Fiscal year ${data.name} updated` : `Fiscal year ${data.name} created as draft`);
-      navigate(`/admin/fiscal-years/${data.id}`);
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+  const others = (years.data ?? []).filter((fy) => fy.id !== existing?.id);
+  const overlapsWith = (start: string, end: string) => others.filter((fy) => start && end && fy.start_date <= end && fy.end_date >= start);
+
+  const submit = async (v: FiscalYearValues) => {
+    const body = { name: v.name.trim(), code: v.code.trim(), start_date: v.start_date, end_date: v.end_date, period_type: v.period_type, notes: v.notes };
+    const { data } = existing
+      ? await api.patch<FiscalYear>(`/fiscal-years/${existing.id}/`, body)
+      : await api.post<FiscalYear>("/fiscal-years/", body);
+    invalidate();
+    toast.success(existing ? `Fiscal year ${data.name} updated` : `Fiscal year ${data.name} created as draft`);
+    navigate(`/admin/fiscal-years/${data.id}`);
   };
 
-  const bsYears = Array.from({ length: BS_MAX_YEAR - BS_MIN_YEAR }, (_, i) => BS_MIN_YEAR + i);
   return (
     <>
       <PageHeader title={existing ? `Edit fiscal year ${existing.name}` : "New fiscal year"}
         back={existing ? { to: `/admin/fiscal-years/${existing.id}`, label: existing.name } : { to: "/admin/fiscal-years", label: "Fiscal years" }}
         subtitle="The year is saved as a draft with its accounting periods. Postings are allowed once it is activated." />
-      <div className="space-y-4">
-        <Panel title="Quick fill">
-          <div className="grid gap-4 p-4 md:grid-cols-2">
-            <div className="flex flex-wrap items-end gap-2">
-              <Field label="BS year starting 1 Shrawan">
-                <Select className="w-32" value={fillBsYear} onChange={(e) => setBsYear(Number(e.target.value))}>
-                  {bsYears.map((y) => <option key={y} value={y}>{y}/{String((y + 1) % 100).padStart(2, "0")}</option>)}
-                </Select>
-              </Field>
-              <Button onClick={applyNepali}>Nepali fiscal year (1 Shrawan – end of Ashadh)</Button>
-            </div>
-            <div className="flex flex-wrap items-end gap-2">
-              <Field label="AD year">
-                <NumberInput className="w-24" value={adYear} onChange={(e) => setAdYear(e.target.value.replace(/\D/g, "").slice(0, 4))} />
-              </Field>
-              <Button onClick={applyCalendar}>Calendar year (AD)</Button>
-            </div>
-          </div>
-        </Panel>
-
-        <Panel title="Fiscal year">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Name" required error={errors.name} hint="Shown in menus and reports.">
-              <Input value={name} onChange={(e) => setName(e.target.value)} invalid={!!errors.name} />
-            </Field>
-            <Field label="Code" required error={errors.code} hint="Used in document numbers, e.g. SI-2083/84-000001.">
-              <Input value={code} maxLength={20} onChange={(e) => setCode(e.target.value)} invalid={!!errors.code} />
-            </Field>
-            <Field label="First day" required error={errors.start_date}>
-              <DatePicker value={start} onChange={setStart} invalid={!!errors.start_date} />
-            </Field>
-            <Field label="Last day" required error={errors.end_date}>
-              <DatePicker value={end} onChange={setEnd} min={start || undefined} invalid={!!errors.end_date} />
-            </Field>
-            <Field label="Accounting periods" error={errors.period_type}>
-              <Select value={periodType} onChange={(e) => setPeriodType(e.target.value as PeriodType)}>
-                {PERIOD_TYPES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </Select>
-            </Field>
-            <Field label="Notes" error={errors.notes} className="sm:col-span-2 lg:col-span-3">
-              <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </Field>
-          </div>
-          {start && end && (
-            <div className="border-t border-line px-4 py-2.5 text-[13px] text-slate-600">
-              <BothDates ad={start} /> <span className="mx-1 text-slate-400">to</span> <BothDates ad={end} />
-              {length !== null && <span className="ml-2 text-slate-500">({length} days)</span>}
-            </div>
-          )}
-          {overlaps.length > 0 && (
-            <Alert tone="error" className="mx-4 mb-4">These dates overlap {overlaps.map((o) => o.name).join(", ")}.</Alert>
-          )}
-        </Panel>
-
-        <Panel title="Periods that will be created" actions={<span className="text-xs text-slate-500">Preview – generated by the server on save</span>}>
-          {preview.error ? <Alert tone="error" className="m-4">{preview.error}</Alert>
-            : !preview.periods.length ? <p className="p-4 text-xs text-slate-500">Choose the first and last day to preview the periods.</p>
-              : <PeriodPreviewTable periods={preview.periods} />}
-        </Panel>
-
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={submit}>{existing ? "Save draft" : "Create fiscal year"}</Button>
-        </div>
-      </div>
+      <BaseForm<FiscalYearValues>
+        defaultValues={{
+          name: existing?.name ?? "", code: existing?.code ?? "", start_date: existing?.start_date ?? "", end_date: existing?.end_date ?? "",
+          period_type: (existing?.period_type as PeriodType) ?? "BS_MONTHLY", notes: existing?.notes ?? "",
+        }}
+        onSubmit={submit} submitLabel={existing ? "Save draft" : "Create fiscal year"} onCancel={() => navigate(-1)}>
+        <QuickFill years={years.data ?? []} />
+        <FormSection title="Fiscal year" columns={4}>
+          <FormField name="name" label="Name" required maxLength={60} hint="Shown in menus and reports." />
+          <FormField name="code" label="Code" required maxLength={20} hint="Used in document numbers, e.g. SI-2083/84-000001." />
+          <FormField name="start_date" label="First day" type="date" required />
+          <EndDateField overlapsWith={overlapsWith} />
+          <FormField name="period_type" label="Accounting periods" type="select" emptyOption={false}
+            options={PERIOD_TYPES.map((p) => ({ value: p.value, label: p.label }))} />
+          <FormField name="notes" label="Notes" type="textarea" rows={2} span={3} />
+          <RangeSummary overlapsWith={overlapsWith} />
+        </FormSection>
+        <PeriodPreviewPanel />
+      </BaseForm>
     </>
   );
 }
 
-function PeriodPreviewTable({ periods }: { periods: PeriodPreview[] }) {
+function EndDateField({ overlapsWith }: { overlapsWith: (start: string, end: string) => FiscalYear[] }) {
+  const start = useWatch({ name: "start_date" }) as string;
   return (
-    <table className="w-full text-[13px]">
-      <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-        <tr><th className="w-12 px-4 py-2">#</th><th className="px-4 py-2">Period</th><th className="px-4 py-2">From</th><th className="px-4 py-2">To</th><th className="px-4 py-2 text-right">Days</th></tr>
-      </thead>
-      <tbody>
-        {periods.map((p) => (
-          <tr key={p.number} className="border-b border-line last:border-0">
-            <td className="px-4 py-1.5 text-slate-500">{p.number}</td>
-            <td className="px-4 py-1.5 font-medium text-slate-800">{p.name}</td>
-            <td className="px-4 py-1.5"><BothDates ad={p.start} /></td>
-            <td className="px-4 py-1.5"><BothDates ad={p.end} /></td>
-            <td className="num px-4 py-1.5">{daysBetween(p.start, p.end) + 1}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <FormField name="end_date" label="Last day" type="date" required min={start || undefined}
+      rules={{
+        validate: (end: string, formValues) => {
+          const values = formValues as FiscalYearValues;
+          if (!end || !values.start_date) return true;
+          if (end <= values.start_date) return "The end date must be after the start date.";
+          if (daysBetween(values.start_date, end) + 1 > 400) return "A fiscal year cannot be longer than 400 days.";
+          const clash = overlapsWith(values.start_date, end);
+          return clash.length ? `These dates overlap ${clash.map((o) => o.name).join(", ")}.` : true;
+        },
+      }} />
+  );
+}
+
+function RangeSummary({ overlapsWith }: { overlapsWith: (start: string, end: string) => FiscalYear[] }) {
+  const [start, end] = useWatch({ name: ["start_date", "end_date"] }) as [string, string];
+  if (!start || !end) return null;
+  const length = end >= start ? daysBetween(start, end) + 1 : null;
+  const clash = overlapsWith(start, end);
+  return (
+    <div className="col-span-full space-y-2 border-t border-line pt-3 text-[13px] text-slate-600">
+      <div>
+        <BothDates ad={start} /> <span className="mx-1 text-slate-400">to</span> <BothDates ad={end} />
+        {length !== null && <span className="ml-2 text-slate-500">({length} days)</span>}
+      </div>
+      {clash.length > 0 && <Alert tone="error">These dates overlap {clash.map((o) => o.name).join(", ")}.</Alert>}
+    </div>
+  );
+}
+
+function QuickFill({ years }: { years: FiscalYear[] }) {
+  const { session } = useAuth();
+  const { setValue } = useFormContext<FiscalYearValues>();
+  const tz = session?.organization?.timezone;
+  const suggestedBsYear = useMemo(() => {
+    const latest = years.reduce<FiscalYear | null>((a, b) => (!a || b.end_date > a.end_date ? b : a), null);
+    try {
+      const ref = latest ? adToBs(addDays(latest.end_date, 1)) : adToBs(todayIn(tz));
+      return ref.month >= 4 ? ref.year : ref.year - 1;
+    } catch {
+      return BS_MIN_YEAR;
+    }
+  }, [years, tz]);
+  const [bsYear, setBsYear] = useState<number | null>(null);
+  const [adYear, setAdYear] = useState<string | null>(null);
+  const fillBsYear = bsYear ?? suggestedBsYear;
+  const fillAdYear = adYear ?? String(Number(todayIn(tz).slice(0, 4)) + (years.length > 0 ? 1 : 0));
+
+  const fill = (v: Partial<FiscalYearValues>) => {
+    for (const [k, value] of Object.entries(v)) {
+      setValue(k as keyof FiscalYearValues, value as never, { shouldDirty: true, shouldValidate: true });
+    }
+  };
+  const applyNepali = () => {
+    try {
+      const fy = nepaliFiscalYear(fillBsYear);
+      fill({ start_date: fy.start, end_date: fy.end, name: fy.code, code: fy.code, period_type: "BS_MONTHLY" });
+    } catch (e) {
+      toast.error(e instanceof BSDateError ? e.message : "That BS year is outside the supported calendar.");
+    }
+  };
+  const applyCalendar = () => {
+    const y = Number(fillAdYear);
+    if (!Number.isInteger(y) || y < 1919 || y > 2043) return toast.error("Enter an AD year between 1919 and 2043.");
+    fill({ start_date: `${y}-01-01`, end_date: `${y}-12-31`, name: String(y), code: String(y), period_type: "AD_MONTHLY" });
+  };
+  const bsYears = Array.from({ length: BS_MAX_YEAR - BS_MIN_YEAR }, (_, i) => BS_MIN_YEAR + i);
+
+  return (
+    <Panel title="Quick fill">
+      <div className="grid gap-4 p-4 md:grid-cols-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="BS year starting 1 Shrawan">
+            <Select className="w-32" value={fillBsYear} onChange={(e) => setBsYear(Number(e.target.value))}>
+              {bsYears.map((y) => <option key={y} value={y}>{y}/{String((y + 1) % 100).padStart(2, "0")}</option>)}
+            </Select>
+          </Field>
+          <Button onClick={applyNepali}>Nepali fiscal year (1 Shrawan – end of Ashadh)</Button>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="AD year">
+            <NumberInput className="w-24" value={fillAdYear} onChange={(e) => setAdYear(e.target.value.replace(/\D/g, "").slice(0, 4))} />
+          </Field>
+          <Button onClick={applyCalendar}>Calendar year (AD)</Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+const PREVIEW_COLUMNS: TableColumn<PeriodPreview>[] = [
+  col.number<PeriodPreview>("number", "#", { width: 48, align: "left", className: "text-slate-500" }),
+  col.custom<PeriodPreview>("name", "Period", (p) => <span className="font-medium text-slate-800">{p.name}</span>),
+  col.custom<PeriodPreview>("start", "From", (p) => <BothDates ad={p.start} />),
+  col.custom<PeriodPreview>("end", "To", (p) => <BothDates ad={p.end} />),
+  col.number<PeriodPreview>("days", "Days", { value: (p) => daysBetween(p.start, p.end) + 1 }),
+];
+
+function PeriodPreviewPanel() {
+  const [start, end, type] = useWatch({ name: ["start_date", "end_date", "period_type"] }) as [string, string, PeriodType];
+  const preview = useMemo(() => {
+    try {
+      return { periods: start && end ? buildPeriods(start, end, type) : [], error: null as string | null };
+    } catch (e) {
+      return { periods: [], error: e instanceof Error ? e.message : "Cannot build periods for these dates." };
+    }
+  }, [start, end, type]);
+  return (
+    <Panel title="Periods that will be created" actions={<span className="text-xs text-slate-500">Preview – generated by the server on save</span>}>
+      {preview.error ? <Alert tone="error" className="m-4">{preview.error}</Alert> : (
+        <BaseTable<PeriodPreview> columns={PREVIEW_COLUMNS} rows={preview.periods} density="compact" rowKey={(p) => p.number}
+          empty={<p className="p-4 text-xs text-slate-500">Choose the first and last day to preview the periods.</p>} />
+      )}
+    </Panel>
   );
 }
 
@@ -372,28 +353,34 @@ export function PeriodTable({ fiscalYear }: { fiscalYear: Pick<FiscalYear, "id" 
   const invalidate = useInvalidateFiscal();
   const query = useGet<AccountingPeriod[]>(["accounting-periods", "by-year", fiscalYear.id], "/accounting-periods/", { fiscal_year: fiscalYear.id });
   const [action, setAction] = useState<{ period: AccountingPeriod; kind: "lock" | "unlock" } | null>(null);
-  const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
   const canLock = can("fiscal.manage");
   const canUnlock = can("fiscal.reopen");
   const closed = fiscalYear.status === "CLOSED";
 
-  const run = async () => {
-    if (!action) return;
-    if (action.kind === "unlock" && !reason.trim()) return;
-    setBusy(true);
-    try {
-      await api.post(`/accounting-periods/${action.period.id}/${action.kind}/`, { reason: reason.trim() });
-      invalidate();
-      toast.success(action.kind === "lock" ? `${action.period.name} locked` : `${action.period.name} reopened`);
-      setAction(null);
-      setReason("");
-    } catch (err) {
-      toast.error(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const columns = useMemo<TableColumn<AccountingPeriod>[]>(() => [
+    col.number<AccountingPeriod>("number", "#", { width: 40, align: "left", className: "text-slate-500" }),
+    col.custom<AccountingPeriod>("name", "Period", (p) => <span className="font-medium text-slate-800">{p.name}</span>),
+    col.custom<AccountingPeriod>("start_date", "From", (p) => <BothDates ad={p.start_date} bs={p.start_date_bs} />),
+    col.custom<AccountingPeriod>("end_date", "To", (p) => <BothDates ad={p.end_date} bs={p.end_date_bs} />),
+    col.status<AccountingPeriod>("status"),
+    col.number<AccountingPeriod>("journal_count", "Journals", { value: (p) => p.journal_count ?? "–" }),
+    col.custom<AccountingPeriod>("locked_by_name", "Locked by", (p) => (p.status === "LOCKED" && p.locked_by_name ? (
+      <span className="text-xs text-slate-500" title={p.lock_reason || undefined}>
+        {p.locked_by_name} · {formatDateTime(p.locked_at)}
+        {p.lock_reason && <span className="block text-slate-400">{p.lock_reason}</span>}
+      </span>
+    ) : <span className="text-xs text-slate-500">–</span>)),
+    col.custom<AccountingPeriod>("actions", "", (p) => (
+      <>
+        {p.status === "OPEN" && canLock && !closed && (
+          <Button size="sm" icon={<Lock className="h-3 w-3" />} onClick={() => setAction({ period: p, kind: "lock" })}>Lock</Button>
+        )}
+        {p.status === "LOCKED" && canUnlock && !closed && (
+          <Button size="sm" icon={<LockOpen className="h-3 w-3" />} onClick={() => setAction({ period: p, kind: "unlock" })}>Unlock</Button>
+        )}
+      </>
+    ), { align: "right" }),
+  ], [canLock, canUnlock, closed]);
 
   if (query.isLoading) return <LoadingBlock />;
   if (query.error) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
@@ -407,65 +394,30 @@ export function PeriodTable({ fiscalYear }: { fiscalYear: Pick<FiscalYear, "id" 
         <span>{periods.length} periods · {locked} locked · {periods.length - locked} open</span>
         <span className="ml-auto">Locked periods reject postings dated inside them. Unlocking requires a reason for the audit trail.</span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] text-[13px]">
-          <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-            <tr>
-              <th className="w-10 px-4 py-2">#</th><th className="px-4 py-2">Period</th><th className="px-4 py-2">From</th><th className="px-4 py-2">To</th>
-              <th className="px-4 py-2">Status</th><th className="px-4 py-2 text-right">Journals</th><th className="px-4 py-2">Locked by</th><th className="px-4 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {periods.map((p) => (
-              <tr key={p.id} className="border-b border-line last:border-0 hover:bg-surface-muted">
-                <td className="px-4 py-1.5 text-slate-500">{p.number}</td>
-                <td className="px-4 py-1.5 font-medium text-slate-800">{p.name}</td>
-                <td className="px-4 py-1.5"><BothDates ad={p.start_date} bs={p.start_date_bs} /></td>
-                <td className="px-4 py-1.5"><BothDates ad={p.end_date} bs={p.end_date_bs} /></td>
-                <td className="px-4 py-1.5"><StatusBadge status={p.status} /></td>
-                <td className="num px-4 py-1.5">{p.journal_count ?? "–"}</td>
-                <td className="px-4 py-1.5 text-xs text-slate-500">
-                  {p.status === "LOCKED" && p.locked_by_name ? (
-                    <span title={p.lock_reason || undefined}>{p.locked_by_name} · {formatDateTime(p.locked_at)}{p.lock_reason && <span className="block text-slate-400">{p.lock_reason}</span>}</span>
-                  ) : "–"}
-                </td>
-                <td className="px-4 py-1.5 text-right">
-                  {p.status === "OPEN" && canLock && !closed && (
-                    <Button size="sm" icon={<Lock className="h-3 w-3" />} onClick={() => { setReason(""); setAction({ period: p, kind: "lock" }); }}>Lock</Button>
-                  )}
-                  {p.status === "LOCKED" && canUnlock && !closed && (
-                    <Button size="sm" icon={<LockOpen className="h-3 w-3" />} onClick={() => { setReason(""); setAction({ period: p, kind: "unlock" }); }}>Unlock</Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <BaseTable<AccountingPeriod> columns={columns} rows={periods} density="compact" minWidth={860} />
       {closed && <p className="border-t border-line px-4 py-2 text-xs text-slate-500">{fiscalYear.name} is closed. Reopen the fiscal year before unlocking its periods.</p>}
-      <Dialog open={!!action} onOpenChange={(o) => { if (!o) { setAction(null); setReason(""); } }} size="sm"
-        title={action ? `${action.kind === "lock" ? "Lock" : "Unlock"} ${action.period.name}?` : ""}
-        footer={<>
-          <Button onClick={() => setAction(null)}>Cancel</Button>
-          <Button variant={action?.kind === "unlock" ? "danger" : "primary"} loading={busy}
-            disabled={action?.kind === "unlock" && !reason.trim()} onClick={run}>
-            {action?.kind === "lock" ? "Lock period" : "Unlock period"}
-          </Button>
-        </>}>
-        {action && (
-          <div className="space-y-3">
+      {action && (
+        <FormDialog<{ reason: string }> open onOpenChange={(o) => !o && setAction(null)} size="sm"
+          title={`${action.kind === "lock" ? "Lock" : "Unlock"} ${action.period.name}?`}
+          submitLabel={action.kind === "lock" ? "Lock period" : "Unlock period"}
+          defaultValues={{ reason: "" }}
+          onSubmit={async (v) => {
+            await api.post(`/accounting-periods/${action.period.id}/${action.kind}/`, { reason: v.reason.trim() });
+            invalidate();
+            toast.success(action.kind === "lock" ? `${action.period.name} locked` : `${action.period.name} reopened`);
+          }}>
+          <FormGrid columns={1}>
             <p className="text-[13px] text-slate-600">
               {action.kind === "lock"
                 ? <>No document dated between <DateText value={action.period.start_date} bs={action.period.start_date_bs} /> and <DateText value={action.period.end_date} bs={action.period.end_date_bs} /> can be posted, reversed or changed while the period is locked.</>
                 : <>Postings dated inside {action.period.name} will be accepted again. Lock it again once the corrections are posted.</>}
             </p>
-            <Field label={action.kind === "lock" ? "Reason (optional)" : "Reason"} required={action.kind === "unlock"}>
-              <Textarea autoFocus rows={3} value={reason} onChange={(e) => setReason(e.target.value)}
-                placeholder={action.kind === "lock" ? "e.g. Month-end close" : "e.g. Post missing supplier bill"} />
-            </Field>
-          </div>
-        )}
-      </Dialog>
+            <FormField name="reason" label={action.kind === "lock" ? "Reason (optional)" : "Reason"} type="textarea" rows={3} autoFocus
+              required={action.kind === "unlock"}
+              placeholder={action.kind === "lock" ? "e.g. Month-end close" : "e.g. Post missing supplier bill"} />
+          </FormGrid>
+        </FormDialog>
+      )}
     </>
   );
 }
@@ -475,6 +427,7 @@ export function PeriodTable({ fiscalYear }: { fiscalYear: Pick<FiscalYear, "id" 
  * ---------------------------------------------------------------------------------------------- */
 
 interface ClosingCheck { check: string; message: string; count?: number }
+interface ClosingEntry { account_id: number; code: string; name: string; type: "INCOME" | "EXPENSE" | "EQUITY"; balance: string }
 interface ClosingPreview {
   fiscal_year: { id: number; name: string; start_date: string; end_date: string; start_date_bs: string; end_date_bs: string };
   can_close: boolean;
@@ -482,7 +435,7 @@ interface ClosingPreview {
   warnings: ClosingCheck[];
   totals: Record<"ledger_debit" | "ledger_credit" | "inventory_gl" | "inventory_stock" | "receivables" | "payables" | "grni" | "income" | "expenses" | "net_profit", string>;
   cash_and_bank: { account: string; balance: string }[];
-  closing_entries: { account_id: number; code: string; name: string; type: "INCOME" | "EXPENSE"; balance: string }[];
+  closing_entries: ClosingEntry[];
   next_fiscal_year: { id: number; name: string } | null;
 }
 interface ClosingRecord {
@@ -613,14 +566,26 @@ function CheckRow({ label, ok, children }: { label: string; ok: boolean; childre
   );
 }
 
+const CASH_COLUMNS: TableColumn<{ account: string; balance: string }>[] = [
+  col.text("account", "Account"),
+  col.money("balance", "Balance", { render: (c) => <span className={cn(toNumber(c.balance) < 0 && "text-red-700")}>{formatAmount(c.balance)}</span> }),
+];
+
+const debitOf = (e: ClosingEntry) => (toNumber(e.balance) < 0 ? formatAmount(-toNumber(e.balance)) : "");
+const creditOf = (e: ClosingEntry) => (toNumber(e.balance) > 0 ? formatAmount(toNumber(e.balance)) : "");
+const CLOSING_COLUMNS: TableColumn<ClosingEntry>[] = [
+  col.custom<ClosingEntry>("name", "Account", (e) => (e.code ? <><span className="text-slate-500">{e.code}</span> {e.name}</> : e.name)),
+  col.custom<ClosingEntry>("type", "Type", (e) => <span className="text-xs text-slate-500">{e.type === "INCOME" ? "Income" : e.type === "EXPENSE" ? "Expense" : "Equity"}</span>),
+  col.money<ClosingEntry>("debit", "Debit", { render: debitOf, value: debitOf }),
+  col.money<ClosingEntry>("credit", "Credit", { render: creditOf, value: creditOf }),
+];
+
 function YearEndClose({ fy }: { fy: FiscalYear }) {
   const { can } = useAuth();
   const invalidate = useInvalidateFiscal();
   const queryClient = useQueryClient();
   const [requested, setRequested] = useState(false);
   const [closing, setClosing] = useState(false);
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
   const preview = useQuery<ClosingPreview>({
     queryKey: ["fiscal-years", "closing-preview", fy.id],
     queryFn: async () => (await api.get<ClosingPreview>(`/fiscal-years/${fy.id}/closing-preview/`)).data,
@@ -660,22 +625,10 @@ function YearEndClose({ fy }: { fy: FiscalYear }) {
   const blockedBy = (name: string) => p.blockers.some((b) => b.check === name);
   const documentBlockers = p.blockers.filter((b) => b.count !== undefined);
   const netProfit = toNumber(t.net_profit);
-
-  const close = async () => {
-    setBusy(true);
-    try {
-      await api.post(`/fiscal-years/${fy.id}/close/`, { confirmation: typed.trim() });
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ["fiscal-years", "closings", fy.id] });
-      toast.success(`${fy.name} closed`);
-      setClosing(false);
-      setTyped("");
-    } catch (err) {
-      toast.error(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const closingRows: ClosingEntry[] = p.closing_entries.length ? [
+    ...p.closing_entries,
+    { account_id: 0, code: "", name: "Retained earnings – net result for the year", type: "EQUITY", balance: String(-netProfit) },
+  ] : [];
 
   return (
     <div className="space-y-4">
@@ -747,51 +700,17 @@ function YearEndClose({ fy }: { fy: FiscalYear }) {
           </div>
         </Panel>
         <Panel title="Cash and bank balances at year end">
-          {!p.cash_and_bank.length ? <p className="p-4 text-xs text-slate-500">No cash or bank accounts.</p> : (
-            <table className="w-full text-[13px]">
-              <tbody>
-                {p.cash_and_bank.map((c) => (
-                  <tr key={c.account} className="border-b border-line last:border-0">
-                    <td className="px-4 py-1.5">{c.account}</td>
-                    <td className={cn("num px-4 py-1.5", toNumber(c.balance) < 0 && "text-red-700")}>{formatAmount(c.balance)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <BaseTable columns={CASH_COLUMNS} rows={p.cash_and_bank} density="compact" rowKey={(c) => c.account}
+            empty={<p className="p-4 text-xs text-slate-500">No cash or bank accounts.</p>} />
         </Panel>
       </div>
 
       <Panel title="Closing entries"
         actions={<span className="text-xs text-slate-500">Posted as one journal dated <DateText value={p.fiscal_year.end_date} bs={p.fiscal_year.end_date_bs} /></span>}>
-        {!p.closing_entries.length ? <p className="p-4 text-xs text-slate-500">No income or expense balances to close.</p> : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                <tr><th className="px-4 py-2">Account</th><th className="px-4 py-2">Type</th><th className="px-4 py-2 text-right">Debit</th><th className="px-4 py-2 text-right">Credit</th></tr>
-              </thead>
-              <tbody>
-                {p.closing_entries.map((e) => {
-                  const net = toNumber(e.balance);
-                  return (
-                    <tr key={e.account_id} className="border-b border-line">
-                      <td className="px-4 py-1.5"><span className="text-slate-500">{e.code}</span> {e.name}</td>
-                      <td className="px-4 py-1.5 text-xs text-slate-500">{e.type === "INCOME" ? "Income" : "Expense"}</td>
-                      <td className="num px-4 py-1.5">{net < 0 ? formatAmount(-net) : ""}</td>
-                      <td className="num px-4 py-1.5">{net > 0 ? formatAmount(net) : ""}</td>
-                    </tr>
-                  );
-                })}
-                <tr className="border-b border-line bg-surface-muted font-medium">
-                  <td className="px-4 py-1.5">Retained earnings – net result for the year</td>
-                  <td className="px-4 py-1.5 text-xs text-slate-500">Equity</td>
-                  <td className="num px-4 py-1.5">{netProfit < 0 ? formatAmount(-netProfit) : ""}</td>
-                  <td className="num px-4 py-1.5">{netProfit > 0 ? formatAmount(netProfit) : ""}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
+        <BaseTable<ClosingEntry> columns={CLOSING_COLUMNS} rows={closingRows} density="compact" minWidth={640}
+          rowKey={(e) => e.account_id || "retained"}
+          rowClassName={(e) => (e.type === "EQUITY" ? "bg-surface-muted font-medium" : undefined)}
+          empty={<p className="p-4 text-xs text-slate-500">No income or expense balances to close.</p>} />
         <KeyValues columns={4} items={[
           { label: "Income", value: formatAmount(t.income) },
           { label: "Expenses", value: formatAmount(t.expenses) },
@@ -809,68 +728,57 @@ function YearEndClose({ fy }: { fy: FiscalYear }) {
               Closing posts the closing journal, locks every period of {fy.name} and carries balances forward
               {p.next_fiscal_year ? ` to ${p.next_fiscal_year.name}` : ""}. It can be undone only by reopening the year, which needs a reason.
             </p>
-            <Button variant="danger" disabled={!p.can_close} onClick={() => { setTyped(""); setClosing(true); }}>Close {fy.name}</Button>
+            <Button variant="danger" disabled={!p.can_close} onClick={() => setClosing(true)}>Close {fy.name}</Button>
           </div>
         </Panel>
       ) : (
         <Alert tone="info">Running the year-end close needs the "Run year-end closing" permission.</Alert>
       )}
 
-      <Dialog open={closing} onOpenChange={setClosing} size="sm" title={`Close fiscal year ${fy.name}?`}
-        description="This posts the closing journal and locks every period."
-        footer={<>
-          <Button onClick={() => setClosing(false)}>Cancel</Button>
-          <Button variant="danger" loading={busy} disabled={typed.trim() !== fy.code} onClick={close}>Close fiscal year</Button>
-        </>}>
-        <div className="space-y-3">
+      <FormDialog<{ confirmation: string }> open={closing} onOpenChange={setClosing} size="sm" title={`Close fiscal year ${fy.name}?`}
+        description="This posts the closing journal and locks every period." submitLabel="Close fiscal year"
+        defaultValues={{ confirmation: "" }}
+        onSubmit={async (v) => {
+          await api.post(`/fiscal-years/${fy.id}/close/`, { confirmation: v.confirmation.trim() });
+          invalidate();
+          queryClient.invalidateQueries({ queryKey: ["fiscal-years", "closings", fy.id] });
+          toast.success(`${fy.name} closed`);
+        }}>
+        <FormGrid columns={1}>
           <p className="text-[13px] text-slate-600">
             {netProfit < 0 ? "A net loss" : "A net profit"} of <strong>{formatAmount(Math.abs(netProfit))}</strong> will be transferred to retained earnings.
           </p>
-          <Field label={<>Type <code className="rounded bg-surface-sunken px-1 font-mono text-slate-800">{fy.code}</code> to confirm</>}>
-            <Input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />
-          </Field>
-        </div>
-      </Dialog>
+          <FormField name="confirmation" label={<>Type <code className="rounded bg-surface-sunken px-1 font-mono text-slate-800">{fy.code}</code> to confirm</>}
+            required autoFocus rules={{ validate: (v: string) => v.trim() === fy.code || `Type ${fy.code} exactly.` }} />
+        </FormGrid>
+      </FormDialog>
     </div>
   );
 }
 
 function ClosingHistory({ fy }: { fy: FiscalYear }) {
   const { session } = useAuth();
+  const tz = session?.organization?.timezone;
   const query = useGet<ClosingRecord[]>(["fiscal-years", "closings", fy.id], `/fiscal-years/${fy.id}/closings/`);
-  if (query.isLoading) return <LoadingBlock />;
-  if (query.error) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
-  const rows = query.data ?? [];
+  const columns: TableColumn<ClosingRecord>[] = [
+    col.custom<ClosingRecord>("created_at", "Closed", (r) => formatDateTime(r.created_at, tz)),
+    col.text<ClosingRecord>("closed_by_name", "By"),
+    col.custom<ClosingRecord>("closing_journal", "Closing journal", (r) => (r.closing_journal
+      ? <Link className="link" to={`/finance/journals/${r.closing_journal}`}>{r.closing_journal_number ?? `#${r.closing_journal}`}</Link> : "–")),
+    col.money<ClosingRecord>("net", "Net result", {
+      value: (r) => r.summary?.totals?.net_profit,
+      render: (r) => {
+        const net = r.summary?.totals?.net_profit;
+        return <span className={cn(toNumber(net) < 0 && "text-red-700")}>{net !== undefined ? formatAmount(net) : "–"}</span>;
+      },
+    }),
+    col.custom<ClosingRecord>("reopened_at", "State", (r) => (r.reopened_at
+      ? <Badge tone="amber">Reopened {formatDateTime(r.reopened_at, tz)}</Badge> : <Badge tone="green">In effect</Badge>)),
+  ];
   return (
     <Panel title="Closing history">
-      {!rows.length ? <EmptyState title="Not closed yet" description={`${fy.name} has never been closed.`} /> : (
-        <table className="w-full text-[13px]">
-          <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-            <tr>
-              <th className="px-4 py-2">Closed</th><th className="px-4 py-2">By</th><th className="px-4 py-2">Closing journal</th>
-              <th className="px-4 py-2 text-right">Net result</th><th className="px-4 py-2">State</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const net = r.summary?.totals?.net_profit;
-              return (
-                <tr key={r.id} className="border-b border-line last:border-0">
-                  <td className="px-4 py-1.5">{formatDateTime(r.created_at, session?.organization?.timezone)}</td>
-                  <td className="px-4 py-1.5">{r.closed_by_name}</td>
-                  <td className="px-4 py-1.5">
-                    {r.closing_journal ? <Link className="link" to={`/finance/journals/${r.closing_journal}`}>{r.closing_journal_number ?? `#${r.closing_journal}`}</Link> : "–"}
-                  </td>
-                  <td className={cn("num px-4 py-1.5", toNumber(net) < 0 && "text-red-700")}>{net !== undefined ? formatAmount(net) : "–"}</td>
-                  <td className="px-4 py-1.5">
-                    {r.reopened_at ? <Badge tone="amber">Reopened {formatDateTime(r.reopened_at, session?.organization?.timezone)}</Badge> : <Badge tone="green">In effect</Badge>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
+      <BaseTable<ClosingRecord> columns={columns} rows={query.data} loading={query.isLoading} error={query.error} onRetry={() => query.refetch()}
+        density="compact" empty={{ title: "Not closed yet", description: `${fy.name} has never been closed.` }} />
     </Panel>
   );
 }

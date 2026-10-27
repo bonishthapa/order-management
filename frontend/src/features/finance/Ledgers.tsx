@@ -1,15 +1,10 @@
-import type { ColDef, ICellRendererParams } from "ag-grid-community";
 import { useMemo, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useGet } from "@/api/hooks";
 import { useFiscalYear } from "@/app/FiscalYearContext";
 import { DateText } from "@/calendar/DateText";
-import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { DataTable } from "@/components/data/DataTable";
-import { ExportMenu } from "@/components/data/ExportMenu";
-import { FilterBar, PeriodFilter } from "@/components/data/Filters";
 import { EntitySelect } from "@/components/forms/EntitySelect";
+import { DataGrid, ExportMenu, FilterBar, PeriodFilter, col, type TableColumn } from "@/components/table";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
 import { PageHeader } from "@/components/ui/Page";
@@ -99,28 +94,22 @@ function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: 
 export function LedgerTable({ data, gridId, balanceHint, height = 560 }: {
   data: LedgerData; gridId: string; balanceHint?: ReactNode; height?: number | "auto";
 }) {
-  const { dateMode } = useAuth();
   const rows = useMemo(() => data.rows.map((r, i) => ({ ...r, id: i + 1 })), [data.rows]);
-  const columns = useMemo<ColDef[]>(() => [
-    col.date("date", "Date", { dateMode }, { maxWidth: dateMode === "AD_BS" ? 200 : 130 }),
-    col.text("journal_number", "Voucher", {
-      minWidth: 160,
-      cellRenderer: (p: ICellRendererParams) => p.data?.journal_id
-        ? <Link className="link" to={`/finance/journals/${p.data.journal_id}`}>{p.value}</Link> : <span>{p.value}</span>,
-    }),
-    col.text("source_number", "Document", {
-      minWidth: 160,
-      cellRenderer: (p: ICellRendererParams) => {
-        if (!p.data || !p.value) return <span className="text-slate-400">–</span>;
-        const to = linkFor(p.data.source_link, p.data.source_id);
-        return to ? <Link className="link" to={to}>{p.value}</Link> : <span>{p.value}</span>;
-      },
-    }),
-    col.text("narration", "Particulars", { flex: 3, minWidth: 220, tooltipField: "narration" }),
-    col.money("debit", "Debit", { valueFormatter: (p) => (Number(p.value) ? formatAmount(p.value) : "") }),
-    col.money("credit", "Credit", { valueFormatter: (p) => (Number(p.value) ? formatAmount(p.value) : "") }),
+  const columns = useMemo<TableColumn<LedgerRow & { id: number }>[]>(() => [
+    col.date("date", "Date"),
+    col.custom("journal_number", "Voucher", (r) => r.journal_id
+      ? <Link className="link" to={`/finance/journals/${r.journal_id}`}>{r.journal_number}</Link> : <span>{r.journal_number}</span>, { minWidth: 160 }),
+    col.custom("source_number", "Document", (r) => {
+      if (!r.journal_id) return null;
+      if (!r.source_number) return <span className="text-slate-400">–</span>;
+      const to = linkFor(r.source_link, r.source_id);
+      return to ? <Link className="link" to={to}>{r.source_number}</Link> : <span>{r.source_number}</span>;
+    }, { minWidth: 160 }),
+    col.text("narration", "Particulars", { flex: 3, minWidth: 220 }),
+    col.money("debit", "Debit", { render: (r) => (Number(r.debit) ? formatAmount(r.debit) : "") }),
+    col.money("credit", "Credit", { render: (r) => (Number(r.credit) ? formatAmount(r.credit) : "") }),
     col.money("balance", "Balance"),
-  ], [dateMode]);
+  ], []);
 
   return (
     <div>
@@ -134,7 +123,7 @@ export function LedgerTable({ data, gridId, balanceHint, height = 560 }: {
       {rows.length === 0 ? (
         <EmptyState title="No postings in this period" description="Change the period to see earlier or later entries." />
       ) : (
-        <DataTable id={gridId} columns={columns} rows={rows} height={height} total={rows.length}
+        <DataGrid id={gridId} columns={columns} rows={rows} height={height} total={rows.length}
           pinnedBottomRow={{ narration: "Period total / closing balance", debit: data.total_debit, credit: data.total_credit,
             balance: data.closing_balance }} />
       )}

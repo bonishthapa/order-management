@@ -1,4 +1,4 @@
-import { DateText } from "@/calendar/DateText";
+import { BaseTable, col } from "@/components/table";
 import { Button } from "@/components/ui/Button";
 import { NumberInput } from "@/components/ui/Input";
 import { formatAmount, round2, toNumber } from "@/utils/format";
@@ -43,34 +43,21 @@ export function AllocationTable({ documents, allocations, onChange, available }:
           <Button size="sm" onClick={autoAllocate} disabled={available <= 0}>Allocate oldest first</Button>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-[13px]">
-          <thead className="border-y border-line bg-surface-muted text-left text-xs text-slate-500">
-            <tr><th className="px-4 py-2">Document</th><th className="px-4 py-2">Date</th><th className="px-4 py-2">Due</th>
-              <th className="px-4 py-2 text-right">Total</th><th className="px-4 py-2 text-right">Outstanding</th><th className="w-36 px-4 py-2 text-right">Allocate</th></tr>
-          </thead>
-          <tbody>
-            {documents.map((d) => {
-              const value = allocations[d.id] ?? "";
-              const over = toNumber(value) > toNumber(d.balance_due);
-              return (
-                <tr key={d.id} className="border-b border-line">
-                  <td className="px-4 py-1.5 font-medium">{d.number}{d.reference && <span className="ml-1 text-2xs font-normal text-slate-500">{d.reference}</span>}</td>
-                  <td className="px-4 py-1.5"><DateText value={d.date} /></td>
-                  <td className="px-4 py-1.5"><DateText value={d.due_date} /></td>
-                  <td className="num px-4 py-1.5">{formatAmount(d.total)}</td>
-                  <td className="num px-4 py-1.5">{formatAmount(d.balance_due)}</td>
-                  <td className="px-4 py-1.5">
-                    <NumberInput aria-label={`Allocate to ${d.number}`} value={value} invalid={over}
-                      onChange={(e) => onChange({ ...allocations, [d.id]: e.target.value })}
-                      onDoubleClick={() => onChange({ ...allocations, [d.id]: Math.min(toNumber(d.balance_due), Math.max(remaining + toNumber(value), 0)).toFixed(2) })} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <BaseTable rows={documents} minWidth={640} density="compact" columns={[
+        col.custom("number", "Document", (d) => <span className="font-medium">{d.number}{d.reference && <span className="ml-1 text-2xs font-normal text-slate-500">{d.reference}</span>}</span>),
+        col.date("date", "Date"),
+        col.date("due_date", "Due"),
+        col.money("total", "Total"),
+        col.money("balance_due", "Outstanding"),
+        col.custom("allocate", "Allocate", (d) => {
+          const value = allocations[d.id] ?? "";
+          return (
+            <NumberInput aria-label={`Allocate to ${d.number}`} value={value} invalid={toNumber(value) > toNumber(d.balance_due)}
+              onChange={(e) => onChange({ ...allocations, [d.id]: e.target.value })}
+              onDoubleClick={() => onChange({ ...allocations, [d.id]: Math.min(toNumber(d.balance_due), Math.max(remaining + toNumber(value), 0)).toFixed(2) })} />
+          );
+        }, { width: 150, align: "right" }),
+      ]} />
       <div className="flex justify-end gap-6 px-4 py-2 text-[13px]">
         <span>Allocated <strong className="tabular-nums">{formatAmount(allocated)}</strong></span>
         <span className={cn(remaining < 0 && "text-red-600")}>{remaining < 0 ? "Over-allocated" : "Unapplied (advance)"} <strong className="tabular-nums">{formatAmount(Math.abs(remaining))}</strong></span>

@@ -1,29 +1,24 @@
-import { DocumentTimeline } from "@/components/document/Timeline";
 import { BookOpen, Pencil, Plus, Send, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { Controller, useFieldArray, useForm, useWatch, type Control, type FieldErrors, type UseFormRegister } from "react-hook-form";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction, useGet, useList } from "@/api/hooks";
 import type { Paginated } from "@/api/types";
 import { todayIn } from "@/calendar/bs";
-import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { DataTable } from "@/components/data/DataTable";
-import { ResourceList } from "@/components/data/ResourceList";
 import { DocumentLines } from "@/components/document/DocumentLines";
 import { ReverseAction } from "@/components/document/ReverseAction";
+import { DocumentTimeline } from "@/components/document/Timeline";
+import { BaseForm, CellDate, CellInput, CellSelect, FormField, FormSection, useFieldArray, useFormContext, useWatch } from "@/components/form";
 import { EntitySelect } from "@/components/forms/EntitySelect";
+import { BaseTable, DataGrid, ResourceList, col, type TableColumn } from "@/components/table";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Select, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, formatDateTime, formatQty, toNumber } from "@/utils/format";
 import { cn } from "@/utils/cn";
@@ -86,6 +81,38 @@ export function useBatches(product: number | null | undefined, warehouse: number
 
 const movementTypeLabel = (t: string) => MOVEMENT_TYPES.find((m) => m.value === t)?.label ?? t;
 
+/** Rate shown with four decimals (unit costs). */
+export const rateColumn = (key: string, header: string, extra: Partial<TableColumn> = {}): TableColumn =>
+  col.custom(key, header, (r: any) => (r[key] === null || r[key] === undefined || r[key] === "" ? "–" : formatAmount(r[key], 4)), { align: "right", minWidth: 110, ...extra });
+
+/** Inline error under an editable table cell. */
+export function CellError({ message }: { message?: string }) {
+  return message ? <p className="mt-0.5 text-xs text-red-600">{message}</p> : null;
+}
+
+/** Remove button for editable line tables. */
+export function RemoveLineButton({ onClick, label = "Remove line" }: { onClick: () => void; label?: string }) {
+  return (
+    <button type="button" aria-label={label} onClick={onClick} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600">
+      <Trash2 className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+/** Product of line ``index`` in a form with a ``lines`` field array, with its tracking flags. */
+export function useLineProduct(index: number) {
+  const { control } = useFormContext();
+  const productId = useWatch({ control, name: `lines.${index}.product` }) as number | null;
+  const product = useDetail<any>("products", productId ?? undefined, { enabled: !!productId, staleTime: 60_000 });
+  return { productId, product: product.data };
+}
+
+/** Field error of line ``index`` (client or server). */
+export function useLineError(index: number, field: string): string | undefined {
+  const { formState } = useFormContext();
+  return (formState.errors as any).lines?.[index]?.[field]?.message;
+}
+
 // --- List ------------------------------------------------------------------------------------------
 
 export function MovementList() {
@@ -108,9 +135,9 @@ export function MovementList() {
           { type: "select", name: "status", label: "Status", options: MOVEMENT_STATUSES },
           { type: "entity", name: "warehouse", label: "Warehouse", resource: "warehouses" },
         ]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Movement", { sortable: true }),
-          col.date("date", "Date", ctx, { sortable: true }),
+          col.date("date", "Date", { sortable: true }),
           col.text("movement_type_label", "Type", { minWidth: 160 }),
           col.text("warehouse_name", "Warehouse", { minWidth: 180 }),
           col.text("reason", "Reason", { flex: 2 }),
@@ -151,6 +178,8 @@ const TYPE_HELP: Record<ManualType, string> = {
   DAMAGE: "Writes off damaged or expired goods. Enter the quantity removed as a positive number; it is costed FIFO and charged to the write-off account.",
 };
 
+const isInbound = (type: ManualType, quantity: string) => type === "OPENING" || (type === "ADJUSTMENT" && toNumber(quantity) >= 0);
+
 export function MovementForm() {
   const { id } = useParams();
   const editing = !!id;
@@ -164,22 +193,7 @@ function MovementFormBody({ initial }: { initial?: any }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session, can } = useAuth();
-  const [saving, setSaving] = useState<null | "draft" | "post">(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  const { control, register, handleSubmit, setError, formState: { errors } } = useForm<MoveValues>({
-    defaultValues: initial ? {
-      movement_type: initial.movement_type, warehouse: initial.warehouse, date: initial.date, reason: initial.reason ?? "", notes: initial.notes ?? "",
-      lines: initial.lines.map((l: any) => ({
-        product: l.product, quantity: String(Number(l.quantity)), unit_cost: l.unit_cost ?? "", batch_number: l.batch_number ?? "",
-        expiry_date: l.expiry_date ?? "", serials: (l.serial_numbers ?? []).join("\n"), notes: l.notes ?? "",
-      })),
-    } : {
-      movement_type: "ADJUSTMENT", warehouse: null, date: todayIn(session?.organization?.timezone), reason: "", notes: "", lines: [emptyMoveLine()],
-    },
-  });
-  const { fields, append, remove } = useFieldArray({ control, name: "lines" });
-  const type = useWatch({ control, name: "movement_type" });
-  const warehouse = useWatch({ control, name: "warehouse" });
+  const canPost = can("inventory.post");
 
   if (initial && initial.status !== "DRAFT") {
     return (
@@ -190,203 +204,190 @@ function MovementFormBody({ initial }: { initial?: any }) {
     );
   }
 
-  const submit = (mode: "draft" | "post") => handleSubmit(async (values) => {
-    setFormError(null);
-    let invalid = false;
-    if (!values.warehouse) { setError("warehouse", { message: "Choose the warehouse." }); invalid = true; }
-    if (!values.reason.trim()) { setError("reason", { message: "Give a reason for the movement." }); invalid = true; }
-    if (!values.lines.length) { setFormError("Add at least one line."); invalid = true; }
-    values.lines.forEach((line, i) => {
-      const qty = toNumber(line.quantity);
-      if (!line.product) { setError(`lines.${i}.product`, { message: "Choose a product." }); invalid = true; }
-      if (!line.quantity || qty === 0) { setError(`lines.${i}.quantity`, { message: "Enter a non-zero quantity." }); invalid = true; }
-      else if (values.movement_type !== "ADJUSTMENT" && qty < 0) {
-        setError(`lines.${i}.quantity`, { message: "Enter a positive quantity." }); invalid = true;
-      }
-      if (values.movement_type === "OPENING" && line.unit_cost === "") { setError(`lines.${i}.unit_cost`, { message: "Unit cost is required for opening stock." }); invalid = true; }
-      if (line.unit_cost !== "" && toNumber(line.unit_cost) < 0) { setError(`lines.${i}.unit_cost`, { message: "Must not be negative." }); invalid = true; }
-    });
-    if (invalid) return;
-    const inbound = (line: MoveLine) => values.movement_type === "OPENING" || (values.movement_type === "ADJUSTMENT" && toNumber(line.quantity) > 0);
-    const payload = {
-      movement_type: values.movement_type, warehouse: values.warehouse, date: values.date, reason: values.reason.trim(), notes: values.notes,
-      lines: values.lines.map((l) => ({
-        product: l.product, quantity: l.quantity, unit_cost: inbound(l) && l.unit_cost !== "" ? l.unit_cost : null,
-        batch_number: l.batch_number.trim(), expiry_date: inbound(l) && l.expiry_date ? l.expiry_date : null,
-        serial_numbers: parseSerials(l.serials), notes: l.notes,
-      })),
-    };
-    setSaving(mode);
-    try {
-      const { data } = initial ? await api.patch(`/stock-movements/${initial.id}/`, payload) : await api.post("/stock-movements/", payload);
-      queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
-      if (mode === "post") {
-        try {
-          await api.post(`/stock-movements/${data.id}/post/`);
-          ["stock-movements", "inventory/balances", "inventory/ledger", "products", "dashboard"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-          toast.success("Movement posted");
-        } catch (e) {
-          toast.error(`Saved as draft but not posted: ${errorMessage(e)}`);
-        }
-      } else {
-        toast.success(initial ? "Draft updated" : "Draft movement saved");
-      }
-      navigate(`/inventory/movements/${data.id}`);
-    } catch (err) {
-      const fe = fieldErrors(err);
-      Object.entries(fe).forEach(([k, message]) => setError(k as any, { message }));
-      setFormError(errorMessage(err));
-    } finally {
-      setSaving(null);
-    }
-  });
+  const defaultValues: MoveValues = initial ? {
+    movement_type: initial.movement_type, warehouse: initial.warehouse, date: initial.date, reason: initial.reason ?? "", notes: initial.notes ?? "",
+    lines: initial.lines.map((l: any) => ({
+      product: l.product, quantity: String(Number(l.quantity)), unit_cost: l.unit_cost ?? "", batch_number: l.batch_number ?? "",
+      expiry_date: l.expiry_date ?? "", serials: (l.serial_numbers ?? []).join("\n"), notes: l.notes ?? "",
+    })),
+  } : { movement_type: "ADJUSTMENT", warehouse: null, date: todayIn(session?.organization?.timezone), reason: "", notes: "", lines: [emptyMoveLine()] };
 
   return (
     <>
       <PageHeader title={initial ? `Edit draft movement #${initial.id}` : "New stock movement"}
         back={initial ? { to: `/inventory/movements/${initial.id}`, label: "Movement" } : { to: "/inventory/movements", label: "Stock movements" }}
         subtitle="Saved as a draft first. Stock and the inventory journal change only when the movement is posted." />
-      <div className="space-y-4">
-        {formError && <Alert tone="error">{formError}</Alert>}
-        <Panel title="Movement">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Type" required>
-              <Select {...register("movement_type")}>
-                {MANUAL_TYPES.map((t) => <option key={t} value={t}>{movementTypeLabel(t)}</option>)}
-              </Select>
-            </Field>
-            <Field label="Warehouse" required error={errors.warehouse?.message}>
-              <Controller control={control} name="warehouse" render={({ field }) => (
-                <EntitySelect resource="warehouses" value={field.value} onChange={(v) => field.onChange(v)} invalid={!!errors.warehouse} />
-              )} />
-            </Field>
-            <Field label="Date" required error={errors.date?.message}>
-              <Controller control={control} name="date" render={({ field }) => (
-                <DatePicker value={field.value} onChange={field.onChange} invalid={!!errors.date} />
-              )} />
-            </Field>
-            <Field label="Reason" required error={errors.reason?.message}>
-              <Input {...register("reason")} invalid={!!errors.reason} placeholder="e.g. Shelf recount, rain damage" />
-            </Field>
-            <Field label="Notes" className="sm:col-span-2 lg:col-span-4"><Textarea rows={2} {...register("notes")} /></Field>
-          </div>
-          <Alert tone="info" className="mx-4 mb-4">{TYPE_HELP[type]}</Alert>
-        </Panel>
-        <Panel title="Lines" actions={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => append(emptyMoveLine())}>Add line</Button>}>
-          {errors.lines?.message && <Alert tone="error" className="m-4">{errors.lines.message}</Alert>}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs font-semibold text-slate-500">
-                <tr>
-                  <th className="w-8 px-2 py-2">#</th>
-                  <th className="min-w-[260px] px-2 py-2">Product</th>
-                  <th className="w-32 px-2 py-2 text-right">{type === "ADJUSTMENT" ? "Quantity (+/−)" : "Quantity"}</th>
-                  <th className="w-32 px-2 py-2 text-right">Unit cost{type === "OPENING" ? " *" : ""}</th>
-                  <th className="w-40 px-2 py-2">Batch</th>
-                  <th className="w-44 px-2 py-2">Expiry</th>
-                  <th className="min-w-[180px] px-2 py-2">Serial numbers</th>
-                  <th className="w-10 px-2 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {fields.map((f, index) => (
-                  <MovementLineRow key={f.id} index={index} control={control} register={register} errors={errors} type={type} warehouse={warehouse}
-                    onRemove={fields.length > 1 ? () => remove(index) : undefined} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant={can("inventory.post") ? "secondary" : "primary"} loading={saving === "draft"} disabled={!!saving}
-            onClick={submit("draft")}>Save draft</Button>
-          {can("inventory.post") && (
-            <Button variant="primary" icon={<Send className="h-3.5 w-3.5" />} loading={saving === "post"} disabled={!!saving}
-              onClick={submit("post")}>Save and post</Button>
-          )}
-        </div>
-      </div>
+      <BaseForm<MoveValues> defaultValues={defaultValues} onCancel={() => navigate(-1)}
+        submitActions={canPost ? [{ key: "draft", label: "Save draft" }, { key: "post", label: "Save and post", primary: true }]
+          : [{ key: "draft", label: "Save draft", primary: true }]}
+        onSubmit={async (values, form, intent) => {
+          const submitMode = intent === "post" && canPost ? "post" : "draft";
+          form.clearErrors("lines");
+          let invalid = false;
+          const fail = (name: string, message: string) => { form.setError(name as any, { type: "manual", message }); invalid = true; };
+          if (!values.lines.length) fail("lines", "Add at least one line.");
+          values.lines.forEach((line, i) => {
+            const qty = toNumber(line.quantity);
+            if (!line.product) fail(`lines.${i}.product`, "Choose a product.");
+            if (!line.quantity || qty === 0) fail(`lines.${i}.quantity`, "Enter a non-zero quantity.");
+            else if (values.movement_type !== "ADJUSTMENT" && qty < 0) fail(`lines.${i}.quantity`, "Enter a positive quantity.");
+            if (values.movement_type === "OPENING" && line.unit_cost === "") fail(`lines.${i}.unit_cost`, "Unit cost is required for opening stock.");
+            if (line.unit_cost !== "" && toNumber(line.unit_cost) < 0) fail(`lines.${i}.unit_cost`, "Must not be negative.");
+          });
+          if (invalid) throw new Error("Correct the highlighted lines.");
+          const payload = {
+            movement_type: values.movement_type, warehouse: values.warehouse, date: values.date, reason: values.reason.trim(), notes: values.notes,
+            lines: values.lines.map((l) => {
+              const inbound = isInbound(values.movement_type, l.quantity);
+              return {
+                product: l.product, quantity: l.quantity, unit_cost: inbound && l.unit_cost !== "" ? l.unit_cost : null,
+                batch_number: l.batch_number.trim(), expiry_date: inbound && l.expiry_date ? l.expiry_date : null,
+                serial_numbers: parseSerials(l.serials), notes: l.notes,
+              };
+            }),
+          };
+          const { data } = initial ? await api.patch(`/stock-movements/${initial.id}/`, payload) : await api.post("/stock-movements/", payload);
+          queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
+          if (submitMode === "post") {
+            try {
+              await api.post(`/stock-movements/${data.id}/post/`);
+              ["stock-movements", "inventory/balances", "inventory/ledger", "products", "dashboard"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+              toast.success("Movement posted");
+            } catch (e) {
+              toast.error(`Saved as draft but not posted: ${errorMessage(e)}`);
+            }
+          } else {
+            toast.success(initial ? "Draft updated" : "Draft movement saved");
+          }
+          navigate(`/inventory/movements/${data.id}`);
+        }}>
+        <FormSection title="Movement" columns={4}>
+          <FormField name="movement_type" label="Type" type="select" required emptyOption={false}
+            options={MANUAL_TYPES.map((t) => ({ value: t, label: movementTypeLabel(t) }))} />
+          <FormField name="warehouse" label="Warehouse" type="entity" resource="warehouses" required />
+          <FormField name="date" label="Date" type="date" required />
+          <FormField name="reason" label="Reason" required placeholder="e.g. Shelf recount, rain damage" />
+          <FormField name="notes" label="Notes" type="textarea" rows={2} span={4} />
+          <MovementTypeHelp />
+        </FormSection>
+        <MovementLines />
+      </BaseForm>
     </>
   );
 }
 
-function MovementLineRow({ index, control, register, errors, type, warehouse, onRemove }: {
-  index: number; control: Control<MoveValues>; register: UseFormRegister<MoveValues>; errors: FieldErrors<MoveValues>; type: ManualType;
-  warehouse: number | null; onRemove?: () => void;
-}) {
-  const productId = useWatch({ control, name: `lines.${index}.product` });
-  const quantity = useWatch({ control, name: `lines.${index}.quantity` });
-  const product = useDetail<any>("products", productId ?? undefined, { enabled: !!productId, staleTime: 60_000 });
-  const p = product.data;
-  const balance = useBalance(warehouse, productId);
-  const qty = toNumber(quantity);
-  const inbound = type === "OPENING" || (type === "ADJUSTMENT" && qty >= 0);
-  const batches = useBatches(productId, warehouse, !!p?.track_batches);
-  const err = (errors.lines?.[index] ?? {}) as any;
-  const listId = `mv-batches-${index}`;
+function MovementTypeHelp() {
+  const type = useWatch({ name: "movement_type" }) as ManualType;
+  return <Alert tone="info" className="col-span-full">{TYPE_HELP[type]}</Alert>;
+}
+
+function MovementLines() {
+  const { control, formState } = useFormContext<MoveValues>();
+  const { fields, append, remove } = useFieldArray({ control, name: "lines" });
+  const type = useWatch({ control, name: "movement_type" });
+  const warehouse = useWatch({ control, name: "warehouse" });
+  const linesError = (formState.errors as any).lines?.message ?? (formState.errors as any).lines?.root?.message;
+  const rows = fields.map((f, index) => ({ id: f.id, index }));
   return (
-    <tr className="border-b border-line align-top">
-      <td className="px-2 py-1.5 pt-3 text-xs text-slate-400">{index + 1}</td>
-      <td className="px-2 py-1.5">
-        <Controller control={control} name={`lines.${index}.product`} render={({ field }) => (
-          <EntitySelect resource="products" params={{ product_type: "STOCK", is_active: "true" }} value={field.value}
-            onChange={(v) => field.onChange(v)} invalid={!!err.product} />
-        )} />
-        {err.product?.message && <p className="mt-0.5 text-xs text-red-600">{err.product.message}</p>}
-        {productId && warehouse && (
-          <p className="mt-0.5 text-2xs text-slate-500">
-            {balance.loading ? "Checking stock…" : <>On hand {formatQty(balance.onHand)} {p?.unit_code ?? ""} · available {formatQty(balance.available)}</>}
-            {p && (p.track_batches || p.track_serials) && <> · {[p.track_batches && "batch", p.track_expiry && "expiry", p.track_serials && "serial"].filter(Boolean).join(", ")} tracked</>}
-          </p>
-        )}
-      </td>
-      <td className="px-2 py-1.5">
-        <NumberInput {...register(`lines.${index}.quantity`)} invalid={!!err.quantity} />
-        {err.quantity?.message && <p className="mt-0.5 text-xs text-red-600">{err.quantity.message}</p>}
-        {type === "ADJUSTMENT" && qty !== 0 && (
-          <p className={cn("mt-0.5 text-2xs", qty > 0 ? "text-emerald-700" : "text-red-700")}>{qty > 0 ? "Adds stock" : "Removes stock"}</p>
-        )}
-      </td>
-      <td className="px-2 py-1.5">
-        <NumberInput {...register(`lines.${index}.unit_cost`)} disabled={!inbound} invalid={!!err.unit_cost}
-          placeholder={inbound ? (type === "OPENING" ? "Required" : "Current average") : "FIFO cost"} />
-        {err.unit_cost?.message && <p className="mt-0.5 text-xs text-red-600">{err.unit_cost.message}</p>}
-      </td>
-      <td className="px-2 py-1.5">
-        {p?.track_batches ? (
-          <>
-            <Input list={listId} {...register(`lines.${index}.batch_number`)} invalid={!!err.batch_number}
-              placeholder={inbound ? "New or existing batch" : "Batch to issue"} />
-            <datalist id={listId}>
-              {(batches.data?.results ?? []).map((b: any) => (
-                <option key={b.id} value={b.batch_number}>{`${formatQty(b.quantity)} in stock${b.expiry_date ? ` · exp ${b.expiry_date}` : ""}`}</option>
-              ))}
-            </datalist>
-          </>
-        ) : <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>}
-      </td>
-      <td className="px-2 py-1.5">
-        {p?.track_expiry && inbound ? (
-          <Controller control={control} name={`lines.${index}.expiry_date`} render={({ field }) => (
-            <DatePicker compact value={field.value} onChange={field.onChange} />
-          )} />
-        ) : <span className="block pt-2 text-xs text-slate-400">{p?.track_expiry ? "From batch" : "–"}</span>}
-      </td>
-      <td className="px-2 py-1.5">
-        {p?.track_serials ? (
-          <Textarea rows={2} {...register(`lines.${index}.serials`)} placeholder="One per line or comma separated" />
-        ) : <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>}
-      </td>
-      <td className="px-2 py-1.5 pt-2">
-        {onRemove && (
-          <button type="button" aria-label="Remove line" onClick={onRemove} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </td>
-    </tr>
+    <Panel title="Lines" actions={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => append(emptyMoveLine())}>Add line</Button>}>
+      {linesError && <Alert tone="error" className="m-4">{linesError}</Alert>}
+      <BaseTable rows={rows} rowKey={(r) => r.id} minWidth={980} density="compact" columns={[
+        col.custom("n", "#", (r) => <span className="text-xs text-slate-400">{r.index + 1}</span>, { width: 32, className: "pt-3" }),
+        col.custom("product", "Product", (r) => <MovementLineProduct index={r.index} warehouse={warehouse} />, { minWidth: 260 }),
+        col.custom("quantity", type === "ADJUSTMENT" ? "Quantity (+/−)" : "Quantity", (r) => <MovementLineQuantity index={r.index} type={type} />, { width: 128, align: "right" }),
+        col.custom("unit_cost", `Unit cost${type === "OPENING" ? " *" : ""}`, (r) => <MovementLineCost index={r.index} type={type} />, { width: 128, align: "right" }),
+        col.custom("batch_number", "Batch", (r) => <MovementLineBatch index={r.index} type={type} warehouse={warehouse} />, { width: 160 }),
+        col.custom("expiry_date", "Expiry", (r) => <MovementLineExpiry index={r.index} type={type} />, { width: 176 }),
+        col.custom("serials", "Serial numbers", (r) => <LineSerials index={r.index} />, { minWidth: 180 }),
+        col.custom("remove", "", (r) => (fields.length > 1 ? <RemoveLineButton onClick={() => remove(r.index)} /> : null), { width: 40 }),
+      ]} />
+    </Panel>
   );
+}
+
+function MovementLineProduct({ index, warehouse }: { index: number; warehouse: number | null }) {
+  const { setValue, clearErrors } = useFormContext();
+  const { productId, product: p } = useLineProduct(index);
+  const error = useLineError(index, "product");
+  const balance = useBalance(warehouse, productId);
+  return (
+    <>
+      <EntitySelect resource="products" params={{ product_type: "STOCK", is_active: "true" }} value={productId} invalid={!!error}
+        onChange={(v) => { setValue(`lines.${index}.product`, v, { shouldDirty: true }); clearErrors(`lines.${index}.product`); }} />
+      <CellError message={error} />
+      {productId && warehouse && (
+        <p className="mt-0.5 text-2xs text-slate-500">
+          {balance.loading ? "Checking stock…" : <>On hand {formatQty(balance.onHand)} {p?.unit_code ?? ""} · available {formatQty(balance.available)}</>}
+          {p && (p.track_batches || p.track_serials) && <> · {[p.track_batches && "batch", p.track_expiry && "expiry", p.track_serials && "serial"].filter(Boolean).join(", ")} tracked</>}
+        </p>
+      )}
+    </>
+  );
+}
+
+function MovementLineQuantity({ index, type }: { index: number; type: ManualType }) {
+  const quantity = useWatch({ name: `lines.${index}.quantity` }) as string;
+  const qty = toNumber(quantity);
+  return (
+    <>
+      <CellInput number name={`lines.${index}.quantity`} label="Quantity" />
+      {type === "ADJUSTMENT" && qty !== 0 && (
+        <p className={cn("mt-0.5 text-left text-2xs", qty > 0 ? "text-emerald-700" : "text-red-700")}>{qty > 0 ? "Adds stock" : "Removes stock"}</p>
+      )}
+    </>
+  );
+}
+
+function MovementLineCost({ index, type }: { index: number; type: ManualType }) {
+  const quantity = useWatch({ name: `lines.${index}.quantity` }) as string;
+  const inbound = isInbound(type, quantity);
+  return (
+    <CellInput number name={`lines.${index}.unit_cost`} label="Unit cost" disabled={!inbound}
+      placeholder={inbound ? (type === "OPENING" ? "Required" : "Current average") : "FIFO cost"} />
+  );
+}
+
+function MovementLineBatch({ index, type, warehouse }: { index: number; type: ManualType; warehouse: number | null }) {
+  const quantity = useWatch({ name: `lines.${index}.quantity` }) as string;
+  const { productId, product: p } = useLineProduct(index);
+  const batches = useBatches(productId, warehouse, !!p?.track_batches);
+  if (!p?.track_batches) return <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>;
+  const inStock = batches.data?.results ?? [];
+  if (!isInbound(type, quantity)) {
+    return <BatchSelect name={`lines.${index}.batch_number`} batches={inStock} />;
+  }
+  return (
+    <>
+      <CellInput name={`lines.${index}.batch_number`} label="Batch" placeholder="New or existing batch" />
+      {inStock.length > 0 && <p className="mt-0.5 text-2xs text-slate-400">In stock: {inStock.map((b: any) => b.batch_number).join(", ")}</p>}
+    </>
+  );
+}
+
+/** Choice of in-stock batches for an issuing line. */
+export function BatchSelect({ name, batches }: { name: string; batches: any[] }) {
+  return (
+    <CellSelect name={name} label="Batch" emptyOption="Choose batch…"
+      options={batches.map((b: any) => ({
+        value: b.batch_number, label: `${b.batch_number} · ${formatQty(b.quantity)}${b.expiry_date ? ` · exp ${b.expiry_date}` : ""}`,
+      }))} />
+  );
+}
+
+function MovementLineExpiry({ index, type }: { index: number; type: ManualType }) {
+  const quantity = useWatch({ name: `lines.${index}.quantity` }) as string;
+  const { product: p } = useLineProduct(index);
+  if (!(p?.track_expiry && isInbound(type, quantity))) {
+    return <span className="block pt-2 text-xs text-slate-400">{p?.track_expiry ? "From batch" : "–"}</span>;
+  }
+  return <CellDate name={`lines.${index}.expiry_date`} />;
+}
+
+/** Serial-number cell for line tables (shown only for serial-tracked products). */
+export function LineSerials({ index }: { index: number }) {
+  const { product: p } = useLineProduct(index);
+  if (!p?.track_serials) return <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>;
+  return <CellInput name={`lines.${index}.serials`} label="Serial numbers" placeholder="Comma separated" />;
 }
 
 // --- Detail ----------------------------------------------------------------------------------------
@@ -402,17 +403,17 @@ export function MovementDetail() {
   const m = query.data;
   const ledger = useList<any>("inventory/ledger", { movement: id, page_size: 500, ordering: "id" }, { enabled: !!m && m.status !== "DRAFT" });
 
-  const ledgerColumns = useMemo(() => [
-    col.text("sku", "SKU", { maxWidth: 140 }),
+  const ledgerColumns: TableColumn[] = [
+    col.text("sku", "SKU", { minWidth: 120 }),
     col.text("product_name", "Product", { flex: 2, minWidth: 200 }),
-    col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
-    col.text("batch_number", "Batch", { maxWidth: 140 }),
+    col.text("warehouse_code", "Warehouse", { minWidth: 100 }),
+    col.text("batch_number", "Batch", { minWidth: 110 }),
     col.qty("quantity", "Quantity"),
-    col.money("unit_cost", "Unit cost", { valueFormatter: (p: any) => formatAmount(p.value, 4) }),
+    rateColumn("unit_cost", "Unit cost"),
     col.money("value", "Value"),
     col.qty("balance_quantity", "Balance qty"),
     col.money("balance_value", "Balance value"),
-  ], []);
+  ];
 
   if (query.isLoading) return <LoadingBlock />;
   if (query.error || !m) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
@@ -490,15 +491,15 @@ export function MovementDetail() {
         {m.lines.length > 0 && (
           <Panel title="Lines">
             <DocumentLines showPricing={false} lines={m.lines} extra={[
-              { key: "unit_cost", label: "Unit cost entered", align: "right", render: (l) => (l.unit_cost === null ? "–" : formatAmount(l.unit_cost, 4)) },
-              { key: "expiry_date", label: "Expiry", render: (l) => <DateText value={l.expiry_date} /> },
-              { key: "notes", label: "Notes", render: (l) => l.notes || "–" },
+              rateColumn("unit_cost", "Unit cost entered"),
+              col.custom("expiry_date", "Expiry", (l: any) => <DateText value={l.expiry_date} />),
+              col.custom("notes", "Notes", (l: any) => l.notes || "–"),
             ]} />
           </Panel>
         )}
         {!draft && (
           <Panel title="Ledger entries" actions={<Link className="link text-xs" to={`/inventory/ledger?movement=${m.id}&fiscal_year=all`}>Open in stock ledger</Link>}>
-            <DataTable id="movement-ledger" columns={ledgerColumns} rows={ledger.data?.results} loading={ledger.isLoading} error={ledger.error}
+            <DataGrid id="movement-ledger" columns={ledgerColumns} rows={ledger.data?.results} loading={ledger.isLoading} error={ledger.error}
               onRetry={() => ledger.refetch()} empty={{ title: "No ledger entries", description: "Nothing was posted for this movement." }}
               onRowClick={(r: any) => navigate(`/inventory/products/${r.product}`)} />
           </Panel>

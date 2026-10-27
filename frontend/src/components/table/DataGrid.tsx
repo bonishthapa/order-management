@@ -1,5 +1,5 @@
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, GridReadyEvent, RowClickedEvent, SortChangedEvent, GridApi, SelectionChangedEvent } from "ag-grid-community";
+import type { ColDef, GridReadyEvent, ICellRendererParams, RowClickedEvent, SortChangedEvent, GridApi, SelectionChangedEvent } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 import { ChevronLeft, ChevronRight, Columns3 } from "lucide-react";
@@ -10,12 +10,16 @@ import { Menu, MenuContent, MenuLabel, MenuTrigger } from "@/components/ui/Menu"
 import { useStoredState } from "@/hooks/useStoredState";
 import { Select } from "@/components/ui/Input";
 import { cn } from "@/utils/cn";
+import { useAuth } from "@/auth/AuthContext";
+import type { DateDisplayMode } from "@/api/types";
+import { renderCell } from "./format";
+import { isNumeric, type TableColumn } from "./types";
 import * as DM from "@radix-ui/react-dropdown-menu";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export interface DataTableProps<T> {
+export interface DataGridProps<T> {
   id: string; // stable key for remembered column visibility
-  columns: ColDef[];
+  columns: TableColumn<T>[];
   rows: T[] | undefined;
   total?: number;
   page?: number;
@@ -37,21 +41,21 @@ export interface DataTableProps<T> {
   getRowClass?: (row: T) => string | undefined;
 }
 
-export function DataTable<T extends { id?: number | string }>({
+export function DataGrid<T extends { id?: number | string }>({
   id, columns, rows, total, page = 1, pageSize = 25, onPageChange, onPageSizeChange, ordering, onOrderingChange, loading, fetching,
   error, onRetry, onRowClick, empty, height = "auto", selectable, onSelectionChange, pinnedBottomRow, getRowClass,
-}: DataTableProps<T>) {
+}: DataGridProps<T>) {
   const gridApi = useRef<GridApi | null>(null);
   const [hidden, setHidden] = useStoredState<string[]>(`grid.${id}.hidden`, []);
 
+  const { dateMode } = useAuth();
   const colDefs = useMemo<ColDef[]>(() => columns.map((c) => {
-    const key = (c.colId ?? c.field) as string;
-    const sortField = (c as any).sortField ?? c.field;
+    const sortField = c.sortField ?? c.key;
     let sort: "asc" | "desc" | null = null;
     if (ordering === sortField) sort = "asc";
     if (ordering === `-${sortField}`) sort = "desc";
-    return { ...c, colId: key, hide: hidden.includes(key), sort, sortable: c.sortable ?? false };
-  }), [columns, hidden, ordering]);
+    return { ...toColDef(c, dateMode), hide: hidden.includes(c.key), sort };
+  }), [columns, hidden, ordering, dateMode]);
 
   const defaultColDef = useMemo<ColDef>(() => ({ resizable: true, suppressMovable: false, flex: 1, comparator: () => 0 }), []);
 
@@ -59,8 +63,8 @@ export function DataTable<T extends { id?: number | string }>({
     const sorted = e.api.getColumnState().find((s) => s.sort);
     if (!onOrderingChange) return;
     if (!sorted) return onOrderingChange("");
-    const def = columns.find((c) => (c.colId ?? c.field) === sorted.colId) as any;
-    const field = def?.sortField ?? def?.field ?? sorted.colId;
+    const def = columns.find((c) => c.key === sorted.colId);
+    const field = def?.sortField ?? def?.key ?? sorted.colId;
     onOrderingChange(sorted.sort === "desc" ? `-${field}` : field);
   }, [columns, onOrderingChange]);
 
@@ -140,7 +144,7 @@ export function DataTable<T extends { id?: number | string }>({
   );
 }
 
-function ColumnPicker({ columns, hidden, setHidden }: { columns: ColDef[]; hidden: string[]; setHidden: (v: string[]) => void }) {
+function ColumnPicker({ columns, hidden, setHidden }: { columns: TableColumn[]; hidden: string[]; setHidden: (v: string[]) => void }) {
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -148,8 +152,8 @@ function ColumnPicker({ columns, hidden, setHidden }: { columns: ColDef[]; hidde
       </MenuTrigger>
       <MenuContent>
         <MenuLabel>Show columns</MenuLabel>
-        {columns.filter((c) => c.headerName).map((c) => {
-          const key = (c.colId ?? c.field) as string;
+        {columns.filter((c) => c.header).map((c) => {
+          const key = c.key;
           return (
             <DM.CheckboxItem key={key} checked={!hidden.includes(key)} onSelect={(e) => e.preventDefault()}
               onCheckedChange={(checked) => setHidden(checked ? hidden.filter((h) => h !== key) : [...hidden, key])}
@@ -157,11 +161,31 @@ function ColumnPicker({ columns, hidden, setHidden }: { columns: ColDef[]; hidde
               <span className={cn("flex h-3.5 w-3.5 items-center justify-center rounded-sm border", !hidden.includes(key) ? "border-brand-600 bg-brand-600" : "border-slate-300")}>
                 {!hidden.includes(key) && <span className="h-1.5 w-1.5 rounded-sm bg-white" />}
               </span>
-              {c.headerName}
+              {c.header}
             </DM.CheckboxItem>
           );
         })}
       </MenuContent>
     </Menu>
   );
+}
+
+/** Converts the shared TableColumn into an AG Grid column (used only here). */
+function toColDef(c: TableColumn, dateMode: DateDisplayMode): ColDef {
+  const numeric = isNumeric(c);
+  const fixedWidth = c.type === "date" ? (dateMode === "AD_BS" ? 200 : 116) : undefined;
+  return {
+    colId: c.key,
+    field: c.key,
+    headerName: typeof c.header === "string" ? c.header : c.key,
+    type: numeric ? "rightAligned" : undefined,
+    cellClass: cn(numeric && "num-cell", (c.type === "status" || c.render) && "flex items-center", c.className),
+    width: c.width ?? fixedWidth,
+    minWidth: c.minWidth ?? fixedWidth,
+    maxWidth: c.maxWidth,
+    flex: fixedWidth || c.width ? 0 : c.flex ?? 1,
+    pinned: c.pinned ? "left" : undefined,
+    sortable: c.sortable ?? false,
+    cellRenderer: (p: ICellRendererParams) => (p.data ? renderCell(c, p.data, dateMode) : p.value),
+  };
 }

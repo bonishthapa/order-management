@@ -1,12 +1,13 @@
 import { Plus, Trash2 } from "lucide-react";
-import { useFieldArray, useWatch, type Control, type UseFormRegister, type UseFormSetValue, type FieldErrors } from "react-hook-form";
+import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
+import { CellInput, CellSelect } from "@/components/form/cells";
 import { api } from "@/api/client";
 import { useOptions } from "@/api/hooks";
 import { EntitySelect } from "@/components/forms/EntitySelect";
+import { BaseTable, col } from "@/components/table";
 import { Button } from "@/components/ui/Button";
-import { NumberInput, Input, Select } from "@/components/ui/Input";
-import { formatAmount } from "@/utils/format";
 import { cn } from "@/utils/cn";
+import { formatAmount } from "@/utils/format";
 import { computeLine } from "./pricing";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -26,18 +27,18 @@ export const emptyLine = (): EditableLine => ({ product: null, description: "", 
 export interface TaxRate { id: number; name: string; rate: string; is_default: boolean; is_active: boolean }
 
 /**
- * Editable product lines. Prices default from the product (sales: wholesale tiers for the customer;
- * purchases: last purchase price) and can be changed; totals here are a preview only.
+ * Editable product lines inside a BaseForm (field array "lines"). Prices default from the product
+ * (sales: wholesale tiers for the customer; purchases: last purchase price); totals here are a preview.
  */
-export function LineItemsEditor({ control, register, setValue, errors, priceMode, customerId, disabled }: {
-  control: Control<any>; register: UseFormRegister<any>; setValue: UseFormSetValue<any>; errors?: FieldErrors<any>;
-  priceMode: "sales" | "purchase"; customerId?: number | null; disabled?: boolean;
-}) {
+export function LineItemsEditor({ priceMode, customerField }: { priceMode: "sales" | "purchase"; customerField?: string }) {
+  const { control, setValue, formState } = useFormContext();
+  const customerId = useWatch({ control, name: customerField ?? "__none__" }) as number | null | undefined;
   const { fields, append, remove } = useFieldArray({ control, name: "lines" });
   const lines = (useWatch({ control, name: "lines" }) ?? []) as EditableLine[];
   const taxes = useOptions<TaxRate>("tax-rates");
   const rateOf = (id: number | null) => Number(taxes.data?.find((t) => t.id === id)?.rate ?? 0);
-  const lineErrors = (errors?.lines ?? []) as any[];
+  const lineErrors = ((formState.errors as any).lines ?? []) as any[];
+  const disabled = formState.isSubmitting;
 
   const onProduct = async (index: number, product: any) => {
     setValue(`lines.${index}.product`, product?.id ?? null, { shouldDirty: true });
@@ -47,74 +48,61 @@ export function LineItemsEditor({ control, register, setValue, errors, priceMode
     if (priceMode === "purchase") {
       setValue(`lines.${index}.unit_price`, String(product.purchase_price));
     } else {
-      const qty = lines[index]?.quantity || "1";
-      const { data } = await api.get(`/products/${product.id}/price/`, { params: { customer: customerId ?? "", quantity: qty } });
+      const { data } = await api.get(`/products/${product.id}/price/`, { params: { customer: customerId ?? "", quantity: lines[index]?.quantity || "1" } });
       setValue(`lines.${index}.unit_price`, String(data.unit_price));
     }
   };
 
+  const err = (i: number, f: string) => lineErrors[i]?.[f]?.message as string | undefined;
+  const rows = fields.map((f, index) => ({ id: f.id, index }));
+
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[920px] text-[13px]">
-        <thead className="border-b border-line bg-surface-muted text-left text-xs font-semibold text-slate-500">
-          <tr>
-            <th className="w-8 px-2 py-2">#</th>
-            <th className="min-w-[260px] px-2 py-2">Product</th>
-            <th className="px-2 py-2">Description</th>
-            <th className="w-24 px-2 py-2 text-right">Qty</th>
-            <th className="w-28 px-2 py-2 text-right">Rate</th>
-            <th className="w-20 px-2 py-2 text-right">Disc %</th>
-            <th className="w-32 px-2 py-2">Tax</th>
-            <th className="w-32 px-2 py-2 text-right">Amount</th>
-            <th className="w-10 px-2 py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {fields.map((field, index) => {
-            const line = lines[index] ?? emptyLine();
-            const preview = computeLine({ ...line, tax_percent: rateOf(line.tax_rate) });
-            const err = lineErrors[index] ?? {};
-            return (
-              <tr key={field.id} className="border-b border-line align-top">
-                <td className="px-2 py-1.5 pt-3 text-xs text-slate-400">{index + 1}</td>
-                <td className="px-2 py-1.5">
-                  <EntitySelect resource="products" value={line.product} disabled={disabled} invalid={!!err.product}
-                    params={{ is_active: "true" }} onChange={(_, item) => onProduct(index, item)}
-                    sublabel={(p) => `${p.unit_code}${p.product_type === "STOCK" ? ` · on hand ${Number(p.on_hand ?? 0)}` : " · service"}`} />
-                  {err.product && <p className="mt-0.5 text-2xs text-red-600">{err.product.message}</p>}
-                </td>
-                <td className="px-2 py-1.5"><Input disabled={disabled} {...register(`lines.${index}.description`)} placeholder="Optional" /></td>
-                <td className="px-2 py-1.5">
-                  <div className="flex items-center gap-1">
-                    <NumberInput disabled={disabled} invalid={!!err.quantity} {...register(`lines.${index}.quantity`)} aria-label="Quantity" />
-                    {line.unit && <span className="text-2xs text-slate-400">{line.unit}</span>}
-                  </div>
-                  {err.quantity && <p className="mt-0.5 text-2xs text-red-600">{err.quantity.message}</p>}
-                </td>
-                <td className="px-2 py-1.5"><NumberInput disabled={disabled} invalid={!!err.unit_price} {...register(`lines.${index}.unit_price`)} aria-label="Rate" /></td>
-                <td className="px-2 py-1.5"><NumberInput disabled={disabled} {...register(`lines.${index}.discount_percent`)} aria-label="Discount percent" /></td>
-                <td className="px-2 py-1.5">
-                  <Select disabled={disabled} aria-label="Tax rate" value={line.tax_rate ?? ""}
-                    onChange={(e) => setValue(`lines.${index}.tax_rate`, e.target.value ? Number(e.target.value) : null, { shouldDirty: true })}>
-                    <option value="">No tax</option>
-                    {taxes.data?.filter((t) => t.is_active).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </Select>
-                </td>
-                <td className="num px-2 py-1.5 pt-3 tabular-nums">{formatAmount(preview.total)}</td>
-                <td className="px-1 py-1.5">
-                  <Button variant="ghost" size="sm" aria-label={`Remove line ${index + 1}`} disabled={disabled || fields.length === 1}
-                    onClick={() => remove(index)}><Trash2 className="h-3.5 w-3.5" /></Button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {!disabled && (
-        <div className="px-2 py-2">
-          <Button size="sm" variant="ghost" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => append(emptyLine())}>Add line</Button>
-        </div>
-      )}
+    <div>
+      <BaseTable
+        rows={rows}
+        rowKey={(r) => r.id}
+        minWidth={920}
+        density="compact"
+        columns={[
+          col.custom("n", "#", (r) => <span className="text-xs text-slate-400">{r.index + 1}</span>, { width: 32 }),
+          col.custom("product", "Product", (r) => (
+            <>
+              <EntitySelect resource="products" value={lines[r.index]?.product ?? null} disabled={disabled} invalid={!!err(r.index, "product")}
+                params={{ is_active: "true" }} onChange={(_, item) => onProduct(r.index, item)}
+                sublabel={(p) => `${p.unit_code}${p.product_type === "STOCK" ? ` · on hand ${Number(p.on_hand ?? 0)}` : " · service"}`} />
+              {err(r.index, "product") && <p className="mt-0.5 text-2xs text-red-600">{err(r.index, "product")}</p>}
+            </>
+          ), { minWidth: 260 }),
+          col.custom("description", "Description", (r) => <CellInput name={`lines.${r.index}.description`} label="Description" placeholder="Optional" disabled={disabled} />),
+          col.custom("quantity", "Qty", (r) => (
+            <div className="flex items-start gap-1">
+              <div className="flex-1"><CellInput number name={`lines.${r.index}.quantity`} label="Quantity" disabled={disabled} /></div>
+              {lines[r.index]?.unit && <span className="pt-2 text-2xs text-slate-400">{lines[r.index].unit}</span>}
+            </div>
+          ), { width: 110, align: "right" }),
+          col.custom("unit_price", "Rate", (r) => (
+            <CellInput number name={`lines.${r.index}.unit_price`} label="Rate" disabled={disabled} />
+          ), { width: 120, align: "right" }),
+          col.custom("discount_percent", "Disc %", (r) => (
+            <CellInput number name={`lines.${r.index}.discount_percent`} label="Discount percent" disabled={disabled} />
+          ), { width: 80, align: "right" }),
+          col.custom("tax_rate", "Tax", (r) => (
+            <CellSelect name={`lines.${r.index}.tax_rate`} label="Tax rate" disabled={disabled} emptyOption="No tax"
+              options={(taxes.data ?? []).filter((t) => t.is_active).map((t) => ({ value: t.id, label: t.name }))} />
+          ), { width: 130 }),
+          col.custom("amount", "Amount", (r) => {
+            const line = lines[r.index] ?? emptyLine();
+            return <span className="tabular-nums">{formatAmount(computeLine({ ...line, tax_percent: rateOf(line.tax_rate) }).total)}</span>;
+          }, { width: 120, align: "right", className: "pt-3" }),
+          col.custom("remove", "", (r) => (
+            <Button variant="ghost" size="sm" aria-label={`Remove line ${r.index + 1}`} disabled={disabled || fields.length === 1}
+              onClick={() => remove(r.index)}><Trash2 className="h-3.5 w-3.5" /></Button>
+          ), { width: 40 }),
+        ]}
+      />
+      <div className={cn("px-2 py-2", disabled && "hidden")}>
+        <Button size="sm" variant="ghost" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => append(emptyLine())}>Add line</Button>
+      </div>
     </div>
   );
 }

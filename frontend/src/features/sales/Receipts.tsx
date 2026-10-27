@@ -1,28 +1,23 @@
 import { Plus, Wallet } from "lucide-react";
+import { BaseTable, col, ResourceList } from "@/components/table";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api } from "@/api/client";
 import { useDetail, useDocumentAction, useGet } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
-import { DatePicker } from "@/calendar/DatePicker";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { AllocationTable, allocationPayload, type OpenDocument } from "@/components/document/AllocationTable";
 import { PrintButton } from "@/components/document/PrintButton";
 import { ReverseAction } from "@/components/document/ReverseAction";
 import { DocumentTimeline } from "@/components/document/Timeline";
-import { EntitySelect } from "@/components/forms/EntitySelect";
-import { PaymentFields, useMethodRequiresReference } from "@/components/forms/PaymentFields";
+import { BaseForm, FormDialog, FormField, FormGrid, FormSection, PaymentMethodFields, useFormContext, useWatch } from "@/components/form";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, toNumber } from "@/utils/format";
 
@@ -48,9 +43,9 @@ export function ReceiptList() {
         exportUrl="/sales-receipts/export/"
         filters={[{ type: "select", name: "status", label: "Status", options: [{ value: "POSTED", label: "Posted" }, { value: "REVERSED", label: "Reversed" }] },
           { type: "entity", name: "customer", label: "Customer", resource: "customers" }, { type: "boolean", name: "unapplied", label: "With unapplied amount" }]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Receipt", { sortable: true }),
-          col.date("date", "Date", ctx, { sortable: true }),
+          col.date("date", "Date", { sortable: true }),
           col.text("customer_name", "Customer", { flex: 2 }),
           col.text("payment_method_name", "Method"),
           col.text("reference", "Reference"),
@@ -67,85 +62,55 @@ export function ReceiptForm() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAuth();
-  const [customer, setCustomer] = useState<number | null>(params.get("customer") ? Number(params.get("customer")) : null);
-  const [date, setDate] = useState(todayIn(session?.organization?.timezone));
-  const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<number | null>(null);
-  const [account, setAccount] = useState<number | null>(null);
-  const [reference, setReference] = useState("");
-  const [notes, setNotes] = useState("");
-  const [allocations, setAllocations] = useState<Record<number, string>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const open = useOpenInvoices(customer);
-  const requiresRef = useMethodRequiresReference(method);
-  const presetInvoice = params.get("invoice");
-  useEffect(() => {
-    const inv = presetInvoice && open.data?.results.find((i: any) => String(i.id) === presetInvoice);
-    if (inv) { setAmount(inv.balance_due); setAllocations({ [inv.id]: inv.balance_due }); }
-  }, [presetInvoice, open.data]);
-
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!customer) e.customer = "Choose the customer.";
-    if (!(toNumber(amount) > 0)) e.amount = "Enter the amount received.";
-    if (!method) e.method = "Choose a payment method.";
-    if (!account) e.account = "Choose where the money was deposited.";
-    if (requiresRef && !reference.trim()) e.reference = "This payment method needs a transaction reference.";
-    const allocated = Object.values(allocations).reduce((s, v) => s + toNumber(v), 0);
-    if (allocated - toNumber(amount) > 0.001) e.allocate = "Allocations exceed the amount received.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    try {
-      const { data } = await api.post("/sales-receipts/", {
-        customer, date, amount, payment_method: method, deposit_account: account, reference, notes, allocate: allocationPayload(allocations),
-      });
-      ["sales-receipts", "sales-invoices", "customers", "dashboard"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast.success(`Receipt ${data.number} posted`);
-      navigate(`/sales/receipts/${data.id}`);
-    } catch (err) {
-      const fe = fieldErrors(err);
-      setErrors({ ...fe, method: fe.payment_method, account: fe.deposit_account });
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+  const submit = async (values: Record<string, any>) => {
+    const allocated = Object.values(values.allocate as Record<number, string>).reduce((s, v) => s + toNumber(v), 0);
+    if (allocated - toNumber(values.amount) > 0.001) throw new Error("Allocations exceed the amount received.");
+    const { data } = await api.post("/sales-receipts/", { ...values, allocate: allocationPayload(values.allocate) });
+    ["sales-receipts", "sales-invoices", "customers", "dashboard"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+    toast.success(`Receipt ${data.number} posted`);
+    navigate(`/sales/receipts/${data.id}`);
   };
-
   return (
     <>
       <PageHeader title="Record customer receipt" back={{ to: "/sales/receipts", label: "Receipts" }}
         subtitle="Posting debits the cash/bank account and credits the customer's receivable." />
-      <div className="space-y-4">
-        <Panel title="Receipt">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Customer" required error={errors.customer} className="lg:col-span-2">
-              <EntitySelect resource="customers" value={customer} onChange={(id) => { setCustomer(id); setAllocations({}); }} invalid={!!errors.customer} />
-            </Field>
-            <Field label="Date received" required error={errors.date}><DatePicker value={date} onChange={setDate} /></Field>
-            <Field label="Amount" required error={errors.amount}><NumberInput value={amount} onChange={(e) => setAmount(e.target.value)} invalid={!!errors.amount} /></Field>
-            <PaymentFields method={method} account={account} onMethod={setMethod} onAccount={setAccount} accountLabel="Deposited to" errors={errors} />
-            <Field label="Transaction reference" required={requiresRef} error={errors.reference} hint="Cheque, transfer or wallet reference.">
-              <Input value={reference} onChange={(e) => setReference(e.target.value)} invalid={!!errors.reference} />
-            </Field>
-            <Field label="Notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-          </div>
-        </Panel>
-        <Panel title="Apply to invoices">
-          {errors.allocate && <Alert tone="error" className="m-4">{errors.allocate}</Alert>}
-          {!customer ? <p className="p-4 text-xs text-slate-500">Choose a customer to see open invoices.</p>
-            : open.isLoading ? <LoadingBlock /> : (
-              <AllocationTable documents={toOpenInvoices(open.data)} allocations={allocations} onChange={setAllocations} available={toNumber(amount)} />
-            )}
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={submit}>Post receipt</Button>
-        </div>
-      </div>
+      <BaseForm submitLabel="Post receipt" onCancel={() => navigate(-1)} onSubmit={submit}
+        defaultValues={{
+          customer: params.get("customer") ? Number(params.get("customer")) : null, date: todayIn(session?.organization?.timezone),
+          amount: "", payment_method: null, deposit_account: null, reference: "", notes: "", allocate: {} as Record<number, string>,
+        }}>
+        <FormSection title="Receipt">
+          <FormField name="customer" label="Customer" type="entity" resource="customers" required span={2} />
+          <FormField name="date" label="Date received" type="date" required />
+          <FormField name="amount" label="Amount" type="money" required />
+          <PaymentMethodFields accountField="deposit_account" accountLabel="Deposited to" />
+          <FormField name="notes" label="Notes" />
+        </FormSection>
+        <Panel title="Apply to invoices"><ReceiptAllocations presetInvoice={params.get("invoice")} /></Panel>
+      </BaseForm>
     </>
   );
+}
+
+/** Allocation table bound to the form's "allocate" value for the chosen customer. */
+function ReceiptAllocations({ presetInvoice }: { presetInvoice: string | null }) {
+  const { setValue } = useFormContext();
+  const customer = useWatch({ name: "customer" }) as number | null;
+  const amount = useWatch({ name: "amount" }) as string;
+  const allocations = (useWatch({ name: "allocate" }) ?? {}) as Record<number, string>;
+  const open = useOpenInvoices(customer);
+  useEffect(() => {
+    const inv = presetInvoice && open.data?.results.find((i: any) => String(i.id) === presetInvoice);
+    if (inv) {
+      setValue("amount", inv.balance_due);
+      setValue("allocate", { [inv.id]: inv.balance_due });
+    }
+  }, [presetInvoice, open.data, setValue]);
+  useEffect(() => setValue("allocate", {}), [customer, setValue]);
+  if (!customer) return <p className="p-4 text-xs text-slate-500">Choose a customer to see open invoices.</p>;
+  if (open.isLoading) return <LoadingBlock />;
+  return <AllocationTable documents={toOpenInvoices(open.data)} allocations={allocations} available={toNumber(amount)}
+    onChange={(a) => setValue("allocate", a, { shouldDirty: true })} />;
 }
 
 function ApplyDialog({ receipt, onClose }: { receipt: any; onClose: () => void }) {
@@ -169,31 +134,22 @@ export function RefundDialog({ customer, source, sourceField, max, onClose }: {
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [date, setDate] = useState(todayIn(session?.organization?.timezone));
-  const [amount, setAmount] = useState(max);
-  const [method, setMethod] = useState<number | null>(null);
-  const [account, setAccount] = useState<number | null>(null);
-  const [reference, setReference] = useState("");
-  const [saving, setSaving] = useState(false);
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="Refund to customer" description={`Up to ${formatAmount(max)} can be refunded.`}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={async () => {
-        setSaving(true);
-        try {
-          const { data } = await api.post("/customer-refunds/", { customer, [sourceField]: source, date, amount, payment_method: method, paid_from_account: account, reference });
-          ["sales-receipts", "sales-returns", "customer-refunds", "customers"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-          toast.success(`Refund ${data.number} posted`);
-          onClose();
-          navigate(`/sales/refunds/${data.id}`);
-        } catch (e) { toast.error(errorMessage(e)); } finally { setSaving(false); }
-      }}>Post refund</Button></>}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Date" required><DatePicker value={date} onChange={setDate} /></Field>
-        <Field label="Amount" required><NumberInput value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
-        <PaymentFields method={method} account={account} onMethod={setMethod} onAccount={setAccount} accountLabel="Paid from" />
-        <Field label="Reference" className="sm:col-span-2"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>
-      </div>
-    </Dialog>
+    <FormDialog open onOpenChange={(o) => !o && onClose()} title="Refund to customer" description={`Up to ${formatAmount(max)} can be refunded.`}
+      submitLabel="Post refund"
+      defaultValues={{ date: todayIn(session?.organization?.timezone), amount: max, payment_method: null, paid_from_account: null, reference: "" }}
+      onSubmit={async (values) => {
+        const { data } = await api.post("/customer-refunds/", { customer, [sourceField]: source, ...values });
+        ["sales-receipts", "sales-returns", "customer-refunds", "customers"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+        toast.success(`Refund ${data.number} posted`);
+        navigate(`/sales/refunds/${data.id}`);
+      }}>
+      <FormGrid>
+        <FormField name="date" label="Date" type="date" required />
+        <FormField name="amount" label="Amount" type="money" required />
+        <PaymentMethodFields accountField="paid_from_account" accountLabel="Paid from" />
+      </FormGrid>
+    </FormDialog>
   );
 }
 
@@ -241,22 +197,13 @@ export function ReceiptDetail() {
           ]} />
         </Panel>
         <Panel title="Applied to">
-          {!r.allocations.length ? <p className="p-4 text-xs text-slate-500">Not applied to any invoice.</p> : (
-            <table className="w-full text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                <tr><th className="px-4 py-2">Invoice</th><th className="px-4 py-2">Invoice date</th><th className="px-4 py-2 text-right">Invoice total</th><th className="px-4 py-2 text-right">Applied</th><th className="px-4 py-2" /></tr>
-              </thead>
-              <tbody>{r.allocations.map((a: any) => (
-                <tr key={a.id} className="border-b border-line">
-                  <td className="px-4 py-2"><Link className="link" to={`/sales/invoices/${a.invoice}`}>{a.invoice_number}</Link></td>
-                  <td className="px-4 py-2"><DateText value={a.invoice_date} /></td>
-                  <td className="num px-4 py-2">{formatAmount(a.invoice_total)}</td>
-                  <td className="num px-4 py-2">{formatAmount(a.amount)}</td>
-                  <td className="px-4 py-2">{!a.is_active && <Badge>Reversed</Badge>}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          )}
+          <BaseTable rows={r.allocations} empty={<p className="p-4 text-xs text-slate-500">Not applied to any invoice.</p>} columns={[
+            col.custom("invoice_number", "Invoice", (a: any) => <Link className="link" to={`/sales/invoices/${a.invoice}`}>{a.invoice_number}</Link>),
+            col.date("invoice_date", "Invoice date"),
+            col.money("invoice_total", "Invoice total"),
+            col.money("amount", "Applied"),
+            col.custom("state", "", (a: any) => (!a.is_active ? <Badge>Reversed</Badge> : null)),
+          ]} />
         </Panel>
         {r.notes && <Panel title="Notes"><p className="p-4 text-[13px]">{r.notes}</p></Panel>}
         <DocumentTimeline resource="sales-receipts" id={r.id} />
@@ -274,7 +221,7 @@ export function RefundList() {
         subtitle="Money paid back from unapplied receipts or credit notes. Start a refund from the receipt or credit note." />
       <ResourceList resource="customer-refunds" dated detailPath={(r) => `/sales/refunds/${r.id}`} searchPlaceholder="Refund no., customer…"
         filters={[{ type: "entity", name: "customer", label: "Customer", resource: "customers" }]}
-        columns={(ctx) => [col.doc("number", "Refund"), col.date("date", "Date", ctx, { sortable: true }), col.text("customer_name", "Customer", { flex: 2 }),
+        columns={[col.doc("number", "Refund"), col.date("date", "Date", { sortable: true }), col.text("customer_name", "Customer", { flex: 2 }),
           col.text("source_number", "Against"), col.text("reference", "Reference"), col.status("status"), col.money("amount", "Amount")]} />
     </>
   );

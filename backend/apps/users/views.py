@@ -49,6 +49,12 @@ class PasswordResetThrottle(AuthThrottle):
     scope = "password_reset"
 
 
+class RefreshThrottle(AuthThrottle):
+    """Refresh runs on every page load; offices often share one public IP, so it gets a wider limit than login."""
+
+    scope = "refresh"
+
+
 def _set_refresh_cookie(response, refresh):
     response.set_cookie(
         settings.REFRESH_COOKIE_NAME, str(refresh),
@@ -124,7 +130,7 @@ def login(request):
 @extend_schema(request=None, responses=OpenApiTypes.OBJECT, tags=["auth"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([AuthThrottle])
+@throttle_classes([RefreshThrottle])
 def refresh(request):
     _check_origin(request)
     raw = request.COOKIES.get(settings.REFRESH_COOKIE_NAME)

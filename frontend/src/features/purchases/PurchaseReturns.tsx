@@ -6,22 +6,18 @@ import { toast } from "sonner";
 import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
-import { DatePicker } from "@/calendar/DatePicker";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { AllocationTable, allocationPayload } from "@/components/document/AllocationTable";
 import { DocumentLines, DocumentTotals } from "@/components/document/DocumentLines";
 import { PrintButton } from "@/components/document/PrintButton";
 import { DocumentTimeline } from "@/components/document/Timeline";
-import { EntitySelect } from "@/components/forms/EntitySelect";
+import { BaseForm, CellInput, FormField, FormSection, useFormContext, useWatch } from "@/components/form";
+import { BaseTable, ResourceList, col, type TableColumn } from "@/components/table";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, formatQty, toNumber } from "@/utils/format";
 import { SupplierRefundDialog, toOpenBills, useOpenBills } from "./SupplierPayments";
@@ -38,8 +34,8 @@ export function PurchaseReturnList() {
         exportUrl="/purchase-returns/export/"
         filters={[{ type: "select", name: "status", label: "Status", options: [{ value: "DRAFT", label: "Draft" }, { value: "POSTED", label: "Posted" }] },
           { type: "entity", name: "supplier", label: "Supplier", resource: "suppliers" }]}
-        columns={(ctx) => [
-          col.doc("number", "Debit note"), col.date("date", "Date", ctx), col.text("supplier_name", "Supplier", { flex: 2 }),
+        columns={[
+          col.doc("number", "Debit note"), col.date("date", "Date"), col.text("supplier_name", "Supplier", { flex: 2 }),
           col.text("bill_number", "Bill"), col.text("reason", "Reason", { flex: 2 }), col.status("status", "Status", "status_label"),
           col.money("grand_total", "Debit"), col.money("unapplied_credit", "Unapplied"),
         ]}
@@ -52,6 +48,7 @@ interface ReturnRow {
   bill_line: number; sku: string; product_name: string; unit: string; billed: string; returnable: number; quantity: string; unit_price: string;
   is_stock: boolean; track_batches: boolean; track_serials: boolean; batch_number: string; serials: string;
 }
+interface ReturnValues { bill: number | null; warehouse: number | null; date: string; reason: string; lines: ReturnRow[] }
 
 const splitSerials = (value: string) => value.split(/[\s,]+/).filter(Boolean);
 
@@ -60,124 +57,107 @@ export function PurchaseReturnForm() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAuth();
-  const [billId, setBillId] = useState<number | null>(params.get("bill") ? Number(params.get("bill")) : null);
-  const bill = useDetail<any>("purchase-bills", billId ?? undefined);
-  const [warehouse, setWarehouse] = useState<number | null>(null);
-  const [date, setDate] = useState(todayIn(session?.organization?.timezone));
-  const [reason, setReason] = useState("");
-  const [rows, setRows] = useState<ReturnRow[]>([]);
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    const b = bill.data;
-    if (!b) return;
-    setWarehouse(b.warehouse ?? null);
-    setRows(b.lines.map((l: any) => ({
-      bill_line: l.id, sku: l.sku, product_name: l.product_name, unit: l.unit, billed: l.quantity, unit_price: l.unit_price, is_stock: l.is_stock,
-      track_batches: !!l.track_batches, track_serials: !!l.track_serials, batch_number: l.batch_number ?? "", serials: "",
-      returnable: toNumber(l.quantity) - toNumber(l.returned_quantity), quantity: "0",
-    })));
-  }, [bill.data]);
-
-  const tracked = rows.some((r) => r.is_stock && (r.track_batches || r.track_serials));
-  const update = (i: number, patch: Partial<ReturnRow>) => setRows(rows.map((x, j) => (j === i ? { ...x, ...patch } : x)));
-
-  const save = async (post: boolean) => {
-    const chosen = rows.filter((r) => toNumber(r.quantity) > 0);
-    if (!billId) return toast.error("Choose the bill the goods were bought on.");
-    if (!warehouse) return toast.error("Choose the warehouse the goods are returned from.");
-    if (!chosen.length) return toast.error("Enter at least one quantity to return.");
+  const submit = async (values: ReturnValues, _form: unknown, intent: string) => {
+    const post = intent === "post";
+    const chosen = values.lines.filter((r) => toNumber(r.quantity) > 0);
+    if (!chosen.length) throw new Error("Enter at least one quantity to return.");
     const over = chosen.find((r) => toNumber(r.quantity) > r.returnable);
-    if (over) return toast.error(`${over.sku}: at most ${formatQty(over.returnable)} can be returned.`);
+    if (over) throw new Error(`${over.sku}: at most ${formatQty(over.returnable)} can be returned.`);
     const missingBatch = chosen.find((r) => r.is_stock && r.track_batches && !r.batch_number.trim());
-    if (missingBatch) return toast.error(`${missingBatch.sku}: enter the batch being returned.`);
+    if (missingBatch) throw new Error(`${missingBatch.sku}: enter the batch being returned.`);
     const serialMismatch = chosen.find((r) => r.is_stock && r.track_serials && splitSerials(r.serials).length !== toNumber(r.quantity));
-    if (serialMismatch) return toast.error(`${serialMismatch.sku}: enter exactly ${formatQty(serialMismatch.quantity)} serial number(s).`);
-    if (!reason.trim()) return toast.error("Give the reason for the return.");
+    if (serialMismatch) throw new Error(`${serialMismatch.sku}: enter exactly ${formatQty(serialMismatch.quantity)} serial number(s).`);
     const lines = chosen.map((r) => ({
       bill_line: r.bill_line, quantity: r.quantity,
       ...(r.is_stock && r.track_batches ? { batch_number: r.batch_number.trim() } : {}),
       ...(r.is_stock && r.track_serials ? { serial_numbers: splitSerials(r.serials) } : {}),
     }));
-    setSaving(true);
-    let createdId: number | null = null;
-    try {
-      const { data } = await api.post("/purchase-returns/", { bill: billId, warehouse, date, reason: reason.trim(), lines });
-      createdId = data.id;
-      if (post) await api.post(`/purchase-returns/${data.id}/post/`);
-      ["purchase-returns", "purchase-bills", "suppliers", "inventory/balances", "products"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast.success(post ? "Return posted and debit note raised" : "Draft saved");
-      navigate(`/purchases/returns/${data.id}`);
-    } catch (e) {
-      toast.error(errorMessage(e));
-      if (createdId) {
-        queryClient.invalidateQueries({ queryKey: ["purchase-returns"] });
+    const { data } = await api.post("/purchase-returns/", { bill: values.bill, warehouse: values.warehouse, date: values.date, reason: values.reason.trim(), lines });
+    let posted = false;
+    if (post) {
+      try {
+        await api.post(`/purchase-returns/${data.id}/post/`);
+        posted = true;
+      } catch (e) {
+        toast.error(errorMessage(e));
         toast.message("The return was saved as a draft so you can correct it.");
-        navigate(`/purchases/returns/${createdId}`);
       }
-    } finally { setSaving(false); }
+    }
+    ["purchase-returns", "purchase-bills", "suppliers", "inventory/balances", "products"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+    if (posted) toast.success("Return posted and debit note raised");
+    else if (!post) toast.success("Draft saved");
+    navigate(`/purchases/returns/${data.id}`);
   };
 
   return (
     <>
       <PageHeader title="New purchase return" back={{ to: "/purchases/returns", label: "Purchase returns" }}
         subtitle="Returns are raised against a posted supplier bill; prices and tax come from that bill." />
-      <div className="space-y-4">
-        <Panel title="Return">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Original bill" required className="lg:col-span-2">
-              <EntitySelect resource="purchase-bills" value={billId} params={{ status: "POSTED" }} onChange={(id) => { setBillId(id); setRows([]); }}
-                initialLabel={bill.data ? `${bill.data.number} · ${bill.data.supplier_name}` : undefined}
-                label={(b) => `${b.number} · ${b.supplier_name}`} sublabel={(b) => `Supplier inv. ${b.supplier_invoice_number} · Total ${formatAmount(b.grand_total)}`} />
-            </Field>
-            <Field label="Return date" required><DatePicker value={date} onChange={setDate} min={bill.data?.bill_date} /></Field>
-            <Field label="Return from warehouse" required>
-              <EntitySelect resource="warehouses" value={warehouse} onChange={(id) => setWarehouse(id)} clearable={false} />
-            </Field>
-            <Field label="Reason" required className="sm:col-span-2 lg:col-span-4"><Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-          </div>
-        </Panel>
-        <Panel title="Items returned">
-          {!billId ? <p className="p-4 text-xs text-slate-500">Choose the bill first.</p> : bill.isLoading ? <LoadingBlock />
-            : bill.error ? <ErrorState error={bill.error} onRetry={() => bill.refetch()} /> : bill.data && bill.data.status !== "POSTED" ? (
-              <Alert tone="warning" className="m-4">Only posted bills can be returned against. {bill.data.number || `Draft bill #${bill.data.id}`} is {bill.data.status_label.toLowerCase()}.</Alert>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-[13px]">
-                  <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                    <tr><th className="px-4 py-2">Item</th><th className="px-4 py-2 text-right">Billed</th><th className="px-4 py-2 text-right">Returnable</th>
-                      <th className="px-4 py-2 text-right">Rate</th><th className="w-28 px-4 py-2">Return qty</th>
-                      {tracked && <th className="w-56 px-4 py-2">Batch / serials</th>}</tr>
-                  </thead>
-                  <tbody>{rows.map((r, i) => (
-                    <tr key={r.bill_line} className="border-b border-line align-top">
-                      <td className="px-4 py-1.5"><div className="font-medium">{r.product_name}</div><div className="text-2xs text-slate-500">{r.sku}{!r.is_stock && " · service"}</div></td>
-                      <td className="num px-4 py-1.5">{formatQty(r.billed)} {r.unit}</td>
-                      <td className="num px-4 py-1.5">{formatQty(r.returnable)}</td>
-                      <td className="num px-4 py-1.5">{formatAmount(r.unit_price)}</td>
-                      <td className="px-4 py-1.5"><NumberInput aria-label={`Return quantity for ${r.sku}`} value={r.quantity} invalid={toNumber(r.quantity) > r.returnable}
-                        disabled={r.returnable <= 0} onChange={(e) => update(i, { quantity: e.target.value })} /></td>
-                      {tracked && (
-                        <td className="space-y-1.5 px-4 py-1.5">
-                          {r.is_stock && r.track_batches && <Input aria-label={`Batch for ${r.sku}`} placeholder="Batch number" value={r.batch_number}
-                            onChange={(e) => update(i, { batch_number: e.target.value })} />}
-                          {r.is_stock && r.track_serials && <Input aria-label={`Serial numbers for ${r.sku}`} placeholder="Serial numbers, comma separated"
-                            value={r.serials} onChange={(e) => update(i, { serials: e.target.value })} />}
-                          {!(r.is_stock && (r.track_batches || r.track_serials)) && <span className="text-2xs text-slate-400">–</span>}
-                        </td>
-                      )}
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            )}
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button loading={saving} onClick={() => save(false)}>Save draft</Button>
-          <Button variant="primary" loading={saving} onClick={() => save(true)}>Post return</Button>
+      <BaseForm<ReturnValues> onSubmit={submit} onCancel={() => navigate(-1)}
+        submitActions={[{ key: "draft", label: "Save draft" }, { key: "post", label: "Post return", primary: true }]}
+        defaultValues={{ bill: params.get("bill") ? Number(params.get("bill")) : null, warehouse: null,
+          date: todayIn(session?.organization?.timezone), reason: "", lines: [] }}>
+        <ReturnFields />
+      </BaseForm>
+    </>
+  );
+}
+
+function ReturnFields() {
+  const { setValue } = useFormContext();
+  const billId = useWatch({ name: "bill" }) as number | null;
+  const bill = useDetail<any>("purchase-bills", billId ?? undefined);
+  const rows = (useWatch({ name: "lines" }) ?? []) as ReturnRow[];
+  useEffect(() => {
+    if (!billId) setValue("lines", []);
+  }, [billId, setValue]);
+  useEffect(() => {
+    const b = bill.data;
+    if (!b) return;
+    setValue("warehouse", b.warehouse ?? null);
+    setValue("lines", b.status !== "POSTED" ? [] : b.lines.map((l: any): ReturnRow => ({
+      bill_line: l.id, sku: l.sku, product_name: l.product_name, unit: l.unit, billed: l.quantity, unit_price: l.unit_price, is_stock: l.is_stock,
+      track_batches: !!l.track_batches, track_serials: !!l.track_serials, batch_number: l.batch_number ?? "", serials: "",
+      returnable: toNumber(l.quantity) - toNumber(l.returned_quantity), quantity: "0",
+    })));
+  }, [bill.data, setValue]);
+  const tracked = rows.some((r) => r.is_stock && (r.track_batches || r.track_serials));
+  const columns: TableColumn<ReturnRow>[] = [
+    col.custom("product_name", "Item", (r) => <><div className="font-medium">{r.product_name}</div><div className="text-2xs text-slate-500">{r.sku}{!r.is_stock && " · service"}</div></>),
+    col.custom("billed", "Billed", (r) => `${formatQty(r.billed)} ${r.unit}`, { align: "right" }),
+    col.qty("returnable", "Returnable"),
+    col.money("unit_price", "Rate"),
+    col.custom("quantity", "Return qty", (r) => (
+      <CellInput number name={`lines.${rows.indexOf(r)}.quantity`} label={`Return quantity for ${r.sku}`}
+        invalid={toNumber(r.quantity) > r.returnable} disabled={r.returnable <= 0} />
+    ), { width: 120 }),
+    ...(tracked ? [col.custom<ReturnRow>("batch_number", "Batch / serials", (r) => {
+      const i = rows.indexOf(r);
+      return (
+        <div className="space-y-1.5">
+          {r.is_stock && r.track_batches && <CellInput name={`lines.${i}.batch_number`} label={`Batch for ${r.sku}`} placeholder="Batch number" />}
+          {r.is_stock && r.track_serials && <CellInput name={`lines.${i}.serials`} label={`Serial numbers for ${r.sku}`} placeholder="Serial numbers, comma separated" />}
+          {!(r.is_stock && (r.track_batches || r.track_serials)) && <span className="text-2xs text-slate-400">–</span>}
         </div>
-      </div>
+      );
+    }, { width: 230 })] : []),
+  ];
+  return (
+    <>
+      <FormSection title="Return">
+        <FormField name="bill" label="Original bill" type="entity" resource="purchase-bills" params={{ status: "POSTED" }} required span={2}
+          optionLabel={(b) => `${b.number} · ${b.supplier_name}`} optionSublabel={(b) => `Supplier inv. ${b.supplier_invoice_number} · Total ${formatAmount(b.grand_total)}`} />
+        <FormField name="date" label="Return date" type="date" required min={bill.data?.bill_date} />
+        <FormField name="warehouse" label="Return from warehouse" type="entity" resource="warehouses" required />
+        <FormField name="reason" label="Reason" type="textarea" rows={2} required span={4} />
+      </FormSection>
+      <Panel title="Items returned">
+        {!billId ? <p className="p-4 text-xs text-slate-500">Choose the bill first.</p> : bill.isLoading ? <LoadingBlock />
+          : bill.error ? <ErrorState error={bill.error} onRetry={() => bill.refetch()} /> : bill.data && bill.data.status !== "POSTED" ? (
+            <Alert tone="warning" className="m-4">Only posted bills can be returned against. {bill.data.number || `Draft bill #${bill.data.id}`} is {bill.data.status_label.toLowerCase()}.</Alert>
+          ) : <BaseTable rows={rows} rowKey={(r) => r.bill_line} columns={columns} minWidth={720} />}
+      </Panel>
     </>
   );
 }
@@ -247,7 +227,7 @@ export function PurchaseReturnDetail() {
           ]} />
         </Panel>
         <Panel title="Items">
-          <DocumentLines lines={r.lines} extra={r.status === "POSTED" ? [{ key: "cost_amount", label: "Stock cost", align: "right", render: (l) => (l.is_stock ? formatAmount(l.cost_amount) : "–") }] : []} />
+          <DocumentLines lines={r.lines} extra={r.status === "POSTED" ? [col.custom("cost_amount", "Stock cost", (l: any) => (l.is_stock ? formatAmount(l.cost_amount) : "–"), { align: "right" })] : []} />
           <DocumentTotals doc={r}>
             {r.status === "POSTED" && <div className="mt-2 flex justify-between border-t border-line pt-2 font-medium"><span>Unapplied debit</span><span className="tabular-nums">{formatAmount(r.unapplied_credit)}</span></div>}
           </DocumentTotals>

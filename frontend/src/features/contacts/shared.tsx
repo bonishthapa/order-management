@@ -1,26 +1,21 @@
-import type { ColDef } from "ag-grid-community";
 import { FileText, Plus } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors, openPdf } from "@/api/client";
+import { api, errorMessage, openPdf } from "@/api/client";
 import { useGet, useList, useOptions } from "@/api/hooks";
 import type { AuditEvent } from "@/api/types";
 import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import type { ColumnContext } from "@/components/data/columns";
-import { DataTable } from "@/components/data/DataTable";
-import { ExportMenu } from "@/components/data/ExportMenu";
-import { FilterBar, PeriodFilter } from "@/components/data/Filters";
+import { FormDialog, FormField, FormGrid } from "@/components/form";
+import { BaseTable, DataGrid, ExportMenu, FilterBar, PeriodFilter, col, type TableColumn } from "@/components/table";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
 import { Alert, EmptyState, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput, Select } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Input";
 import { Panel } from "@/components/ui/Page";
 import { formatAmount, formatDateTime, titleCase, toNumber } from "@/utils/format";
 import { cn } from "@/utils/cn";
@@ -42,51 +37,40 @@ export function useCategoryOptions(kind: PartyKind) {
   return (query.data ?? []).map((c) => ({ value: String(c.id), label: c.name }));
 }
 
-/** Category select with an inline "New category" dialog for users who can manage the party master. */
-export function CategoryField({ kind, value, onChange, canCreate, error }: {
-  kind: PartyKind; value: number | null; onChange: (id: number | null) => void; canCreate: boolean; error?: string;
-}) {
+/**
+ * Category field for a BaseForm (field "category") with an inline "New category" dialog for users who can manage the
+ * party master. The dialog form is a separate BaseForm; its submit event is stopped so it never submits the page form.
+ */
+export function CategoryField({ kind, canCreate }: { kind: PartyKind; canCreate: boolean }) {
   const query = useOptions<Category>(PARTY[kind].categories);
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [nameError, setNameError] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  const create = async () => {
-    if (!name.trim()) return setNameError("Enter a name.");
-    setSaving(true);
-    try {
-      const { data } = await api.post<Category>(`/${PARTY[kind].categories}/`, { name: name.trim() });
-      await queryClient.invalidateQueries({ queryKey: [PARTY[kind].categories] });
-      onChange(data.id);
-      toast.success(`Category “${data.name}” created`);
-      setOpen(false);
-      setName("");
-      setNameError(undefined);
-    } catch (e) {
-      setNameError(fieldErrors(e).name ?? errorMessage(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const categories = (query.data ?? []).filter((c) => c.is_active || c.id === value);
   return (
-    <Field label="Category" error={error}>
-      <div className="flex gap-1.5">
-        <Select value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} invalid={!!error}>
-          <option value="">No category</option>
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Select>
-        {canCreate && <Button aria-label="New category" title="New category" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setOpen(true)} />}
-      </div>
-      <Dialog open={open} onOpenChange={setOpen} title="New category" size="sm"
-        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" loading={saving} onClick={create}>Create category</Button></>}>
-        <Field label="Name" required error={nameError}>
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} invalid={!!nameError}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); create(); } }} />
-        </Field>
-      </Dialog>
-    </Field>
+    <FormField name="category" label="Category" type="custom" render={({ value, onChange, invalid, disabled }) => {
+      const categories = (query.data ?? []).filter((c) => c.is_active || c.id === value);
+      return (
+        <div className="flex gap-1.5">
+          <Select value={value ?? ""} disabled={disabled} invalid={invalid} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">No category</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+          {canCreate && <Button aria-label="New category" title="New category" icon={<Plus className="h-3.5 w-3.5" />} disabled={disabled}
+            onClick={() => setOpen(true)} />}
+          <div className="contents" onSubmit={(e) => e.stopPropagation()}>
+            <FormDialog<{ name: string }> open={open} onOpenChange={setOpen} title="New category" size="sm" submitLabel="Create category"
+              defaultValues={{ name: "" }}
+              onSubmit={async (v) => {
+                const { data } = await api.post<Category>(`/${PARTY[kind].categories}/`, { name: v.name.trim() });
+                await queryClient.invalidateQueries({ queryKey: [PARTY[kind].categories] });
+                onChange(data.id);
+                toast.success(`Category “${data.name}” created`);
+              }}>
+              <FormField name="name" label="Name" required autoFocus />
+            </FormDialog>
+          </div>
+        </div>
+      );
+    }} />
   );
 }
 
@@ -105,33 +89,9 @@ export function OpeningBalancePanel({ kind, party }: { kind: PartyKind; party: a
   const { can, session } = useAuth();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(todayIn(session?.organization?.timezone));
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
   const cfg = PARTY[kind];
   const positive = kind === "customer" ? "the customer owes you" : "you owe the supplier";
   const negative = kind === "customer" ? "an advance received from the customer" : "an advance paid to the supplier";
-
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!amount.trim() || toNumber(amount) === 0 || Number.isNaN(Number(amount))) e.amount = "Enter a non-zero amount.";
-    if (!date) e.date = "Enter the opening balance date.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    try {
-      await api.post(`/${cfg.resource}/${party.id}/opening-balance/`, { amount, date });
-      [cfg.resource, "journals", "accounts", "dashboard"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast.success("Opening balance posted");
-      setOpen(false);
-    } catch (err) {
-      setErrors(fieldErrors(err));
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <Panel title="Opening balance" actions={!party.opening_balance_posted && can(cfg.perm) && (
@@ -150,19 +110,21 @@ export function OpeningBalancePanel({ kind, party }: { kind: PartyKind; party: a
           No opening balance posted. Use this when taking over a balance from a previous system; it is posted once against opening balance equity.
         </p>
       )}
-      <Dialog open={open} onOpenChange={setOpen} title={`Opening balance – ${party.name}`}
-        description="Posted once to the ledger. Later corrections are made with a manual journal."
-        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" loading={saving} onClick={submit}>Post opening balance</Button></>}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Amount" required error={errors.amount} hint={`Positive: ${positive}. Negative: ${negative}.`}>
-            <NumberInput value={amount} onChange={(e) => setAmount(e.target.value)} invalid={!!errors.amount} placeholder="0.00" />
-          </Field>
-          <Field label="As of date" required error={errors.date}>
-            <DatePicker value={date} onChange={setDate} invalid={!!errors.date} />
-          </Field>
-        </div>
+      <FormDialog<{ amount: string; date: string }> open={open} onOpenChange={setOpen} title={`Opening balance – ${party.name}`}
+        description="Posted once to the ledger. Later corrections are made with a manual journal." submitLabel="Post opening balance"
+        defaultValues={{ amount: "", date: todayIn(session?.organization?.timezone) }}
+        onSubmit={async (v) => {
+          await api.post(`/${cfg.resource}/${party.id}/opening-balance/`, v);
+          [cfg.resource, "journals", "accounts", "dashboard"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+          toast.success("Opening balance posted");
+        }}>
+        <FormGrid>
+          <FormField name="amount" label="Amount" type="money" required placeholder="0.00" hint={`Positive: ${positive}. Negative: ${negative}.`}
+            rules={{ validate: (v: string) => (toNumber(v) !== 0 && !Number.isNaN(Number(v))) || "Enter a non-zero amount." }} />
+          <FormField name="date" label="As of date" type="date" required />
+        </FormGrid>
         <Alert tone="info" className="mt-3">This cannot be edited after posting. The entry is recorded in the audit trail.</Alert>
-      </Dialog>
+      </FormDialog>
     </Panel>
   );
 }
@@ -245,30 +207,16 @@ export function PartyAging({ kind, party }: { kind: PartyKind; party: any }) {
       {data && (
         <Panel title={kind === "customer" ? "Open invoices" : "Open bills"}>
           {data.documents.length === 0 ? <EmptyState title="Nothing outstanding" description="All documents were settled as of this date." /> : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-[13px]">
-                <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                  <tr>
-                    <th className="px-4 py-2">Document</th><th className="px-4 py-2">Date</th><th className="px-4 py-2">Due</th>
-                    <th className="px-4 py-2 text-right">Days overdue</th><th className="px-4 py-2">Bucket</th>
-                    <th className="px-4 py-2 text-right">Total</th><th className="px-4 py-2 text-right">Outstanding</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.documents.map((d) => (
-                    <tr key={d.id} className="border-b border-line">
-                      <td className="px-4 py-1.5"><Link className="link font-medium" to={`${docBase}/${d.id}`}>{d.number}</Link></td>
-                      <td className="px-4 py-1.5"><DateText value={d.date} /></td>
-                      <td className="px-4 py-1.5"><DateText value={d.due_date} /></td>
-                      <td className={cn("num px-4 py-1.5", d.days_overdue > 0 && "text-red-700")}>{d.days_overdue || "–"}</td>
-                      <td className="px-4 py-1.5">{data.buckets.find((b) => b.key === d.bucket)?.label}</td>
-                      <td className="num px-4 py-1.5">{formatAmount(d.total)}</td>
-                      <td className="num px-4 py-1.5 font-medium">{formatAmount(d.outstanding)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <BaseTable rows={data.documents} minWidth={640} density="compact" columns={[
+              col.custom("number", "Document", (d) => <Link className="link font-medium" to={`${docBase}/${d.id}`}>{d.number}</Link>),
+              col.date("date", "Date"),
+              col.date("due_date", "Due"),
+              col.number("days_overdue", "Days overdue", {
+                render: (d) => <span className={cn(d.days_overdue > 0 && "text-red-700")}>{d.days_overdue || "–"}</span> }),
+              col.custom("bucket", "Bucket", (d) => data.buckets.find((b) => b.key === d.bucket)?.label),
+              col.money("total", "Total"),
+              col.money("outstanding", "Outstanding", { className: "font-medium" }),
+            ]} />
           )}
         </Panel>
       )}
@@ -278,20 +226,18 @@ export function PartyAging({ kind, party }: { kind: PartyKind; party: any }) {
 
 /** Paginated list of one document type filtered to a party, for detail-page tabs. */
 export function PartyDocuments({ resource, filter, partyId, columns, detailBase, newAction, emptyTitle, gridId }: {
-  resource: string; filter: string; partyId: number; columns: (ctx: ColumnContext) => ColDef[]; detailBase: string;
+  resource: string; filter: string; partyId: number; columns: TableColumn[]; detailBase: string;
   newAction?: ReactNode; emptyTitle: string; gridId: string;
 }) {
   const navigate = useNavigate();
-  const { dateMode } = useAuth();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [ordering, setOrdering] = useState("");
   const query = useList<any>(resource, { [filter]: partyId, page, page_size: pageSize, ordering });
-  const colDefs = useMemo(() => columns({ dateMode }), [columns, dateMode]);
   return (
     <div className="panel overflow-hidden">
       {newAction && <div className="flex justify-end border-b border-line px-3 py-2">{newAction}</div>}
-      <DataTable id={gridId} columns={colDefs} rows={query.data?.results} total={query.data?.count} page={page} pageSize={pageSize}
+      <DataGrid id={gridId} columns={columns} rows={query.data?.results} total={query.data?.count} page={page} pageSize={pageSize}
         onPageChange={setPage} onPageSizeChange={(s) => { setPageSize(s); setPage(1); }} ordering={ordering}
         onOrderingChange={(o) => { setOrdering(o); setPage(1); }} loading={query.isLoading} fetching={query.isFetching}
         error={query.error} onRetry={() => query.refetch()} onRowClick={(row: any) => navigate(`${detailBase}/${row.id}`)}
@@ -360,15 +306,4 @@ export function AuditActivity({ entityType, entityId }: { entityType: string; en
 
 export function ActiveBadge({ active }: { active: boolean }) {
   return active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>;
-}
-
-/** Shared state helper for simple master forms: values, one setter, server field errors. */
-export function useFormState<T extends Record<string, any>>(initial: T) {
-  const [values, setValues] = useState<T>(initial);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const setField = <K extends keyof T>(key: K, value: T[K]) => {
-    setValues((v) => ({ ...v, [key]: value }));
-    if (errors[key as string]) setErrors((e) => { const next = { ...e }; delete next[key as string]; return next; });
-  };
-  return { values, setValues, setField, errors, setErrors };
 }

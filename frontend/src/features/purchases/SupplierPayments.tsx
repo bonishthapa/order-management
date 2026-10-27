@@ -3,27 +3,22 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction, useGet } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
-import { DatePicker } from "@/calendar/DatePicker";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { AllocationTable, allocationPayload, type OpenDocument } from "@/components/document/AllocationTable";
 import { Attachments } from "@/components/document/Attachments";
 import { PrintButton } from "@/components/document/PrintButton";
 import { ReverseAction } from "@/components/document/ReverseAction";
 import { DocumentTimeline } from "@/components/document/Timeline";
-import { EntitySelect } from "@/components/forms/EntitySelect";
-import { PaymentFields, useMethodRequiresReference } from "@/components/forms/PaymentFields";
+import { AllocationField, BaseForm, FormDialog, FormField, FormGrid, FormSection, PaymentMethodFields, useFormContext, useWatch } from "@/components/form";
+import { BaseTable, ResourceList, col, type TableColumn } from "@/components/table";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, NumberInput } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, formatDateTime, toNumber } from "@/utils/format";
 
@@ -52,9 +47,9 @@ export function PaymentVoucherList() {
         exportUrl="/payment-vouchers/export/"
         filters={[{ type: "select", name: "status", label: "Status", options: VOUCHER_STATUSES },
           { type: "entity", name: "supplier", label: "Supplier", resource: "suppliers" }]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Voucher", { sortable: true }),
-          col.date("date", "Date", ctx, { sortable: true }),
+          col.date("date", "Date", { sortable: true }),
           col.text("supplier_name", "Supplier", { flex: 2 }),
           col.text("payment_method_name", "Method"),
           col.text("reference", "Reference"),
@@ -85,57 +80,35 @@ export function PaymentVoucherForm() {
   return <VoucherEditor voucher={voucher} />;
 }
 
+interface VoucherValues {
+  supplier: number | null; date: string; amount: string; payment_method: number | null; paid_from_account: number | null;
+  reference: string; notes: string; allocations: Record<number, string>;
+}
+
 function VoucherEditor({ voucher }: { voucher?: any }) {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAuth();
-  const [supplier, setSupplier] = useState<number | null>(voucher?.supplier ?? (params.get("supplier") ? Number(params.get("supplier")) : null));
-  const [date, setDate] = useState(voucher?.date ?? todayIn(session?.organization?.timezone));
-  const [amount, setAmount] = useState<string>(voucher?.amount ?? "");
-  const [method, setMethod] = useState<number | null>(voucher?.payment_method ?? null);
-  const [account, setAccount] = useState<number | null>(voucher?.paid_from_account ?? null);
-  const [reference, setReference] = useState<string>(voucher?.reference ?? "");
-  const [notes, setNotes] = useState<string>(voucher?.notes ?? "");
-  const [allocations, setAllocations] = useState<Record<number, string>>(
-    Object.fromEntries((voucher?.requested_allocations ?? []).map((a: any) => [a.bill, String(a.amount)])),
-  );
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const open = useOpenBills(supplier);
-  const requiresRef = useMethodRequiresReference(method);
-  const presetBill = voucher ? null : params.get("bill");
-  useEffect(() => {
-    const bill = presetBill && open.data?.results.find((b: any) => String(b.id) === presetBill);
-    if (bill) { setAmount(bill.balance_due); setAllocations({ [bill.id]: bill.balance_due }); }
-  }, [presetBill, open.data]);
+  const defaultValues: VoucherValues = {
+    supplier: voucher?.supplier ?? (params.get("supplier") ? Number(params.get("supplier")) : null),
+    date: voucher?.date ?? todayIn(session?.organization?.timezone),
+    amount: voucher?.amount ?? "",
+    payment_method: voucher?.payment_method ?? null,
+    paid_from_account: voucher?.paid_from_account ?? null,
+    reference: voucher?.reference ?? "",
+    notes: voucher?.notes ?? "",
+    allocations: Object.fromEntries((voucher?.requested_allocations ?? []).map((a: any) => [a.bill, String(a.amount)])),
+  };
 
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!supplier) e.supplier = "Choose the supplier.";
-    if (!date) e.date = "Enter the payment date.";
-    if (!(toNumber(amount) > 0)) e.amount = "Enter the amount paid.";
-    if (!method) e.method = "Choose a payment method.";
-    if (!account) e.account = "Choose the account the money is paid from.";
-    if (requiresRef && !reference.trim()) e.reference = "This payment method needs a transaction reference.";
-    const allocated = Object.values(allocations).reduce((s, v) => s + toNumber(v), 0);
-    if (allocated - toNumber(amount) > 0.001) e.allocate = "Allocations exceed the amount paid.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    try {
-      const body = { supplier, date, amount, payment_method: method, paid_from_account: account, reference: reference.trim(), notes, allocate: allocationPayload(allocations) };
-      const { data } = voucher ? await api.patch(`/payment-vouchers/${voucher.id}/`, body) : await api.post("/payment-vouchers/", body);
-      ["payment-vouchers"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast.success(voucher ? "Draft voucher saved" : "Draft voucher prepared; it takes effect when approved and posted");
-      navigate(`/purchases/payments/${data.id}`);
-    } catch (err) {
-      const fe = fieldErrors(err);
-      setErrors({ ...fe, method: fe.payment_method, account: fe.paid_from_account });
-      toast.error(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+  const submit = async ({ allocations, ...values }: VoucherValues) => {
+    const allocated = Object.values(allocations ?? {}).reduce((s, v) => s + toNumber(v), 0);
+    if (allocated - toNumber(values.amount) > 0.001) throw new Error("Allocations exceed the amount paid.");
+    const body = { ...values, reference: values.reference.trim(), allocate: allocationPayload(allocations ?? {}) };
+    const { data } = voucher ? await api.patch(`/payment-vouchers/${voucher.id}/`, body) : await api.post("/payment-vouchers/", body);
+    queryClient.invalidateQueries({ queryKey: ["payment-vouchers"] });
+    toast.success(voucher ? "Draft voucher saved" : "Draft voucher prepared; it takes effect when approved and posted");
+    navigate(`/purchases/payments/${data.id}`);
   };
 
   return (
@@ -143,35 +116,41 @@ function VoucherEditor({ voucher }: { voucher?: any }) {
       <PageHeader title={voucher ? "Edit draft payment voucher" : "New supplier payment"}
         back={voucher ? { to: `/purchases/payments/${voucher.id}`, label: `Draft voucher #${voucher.id}` } : { to: "/purchases/payments", label: "Supplier payments" }}
         subtitle="The voucher is saved as a draft. Posting it credits the cash/bank account and reduces the supplier's payable." />
-      <div className="space-y-4">
-        <Panel title="Payment">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Supplier" required error={errors.supplier} className="lg:col-span-2">
-              <EntitySelect resource="suppliers" value={supplier} initialLabel={voucher?.supplier_name}
-                onChange={(id) => { setSupplier(id); setAllocations({}); }} invalid={!!errors.supplier} />
-            </Field>
-            <Field label="Payment date" required error={errors.date}><DatePicker value={date} onChange={setDate} invalid={!!errors.date} /></Field>
-            <Field label="Amount" required error={errors.amount}><NumberInput value={amount} onChange={(e) => setAmount(e.target.value)} invalid={!!errors.amount} /></Field>
-            <PaymentFields method={method} account={account} onMethod={setMethod} onAccount={setAccount} accountLabel="Paid from" errors={errors} />
-            <Field label="Transaction reference" required={requiresRef} error={errors.reference} hint="Cheque, transfer or wallet reference.">
-              <Input value={reference} onChange={(e) => setReference(e.target.value)} invalid={!!errors.reference} />
-            </Field>
-            <Field label="Notes" error={errors.notes}><Input value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-          </div>
-        </Panel>
-        <Panel title="Apply to bills">
-          {errors.allocate && <Alert tone="error" className="m-4">{errors.allocate}</Alert>}
-          {!supplier ? <p className="p-4 text-xs text-slate-500">Choose a supplier to see open bills.</p>
-            : open.isLoading ? <LoadingBlock /> : open.error ? <ErrorState error={open.error} onRetry={() => open.refetch()} /> : (
-              <AllocationTable documents={toOpenBills(open.data)} allocations={allocations} onChange={setAllocations} available={toNumber(amount)} />
-            )}
-          {supplier && <p className="border-t border-line px-4 py-2 text-xs text-slate-500">Allocations are applied to the bills when the voucher is posted.</p>}
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={submit}>Save draft voucher</Button>
-        </div>
-      </div>
+      <BaseForm<VoucherValues> defaultValues={defaultValues} onSubmit={submit} onCancel={() => navigate(-1)} submitLabel="Save draft voucher"
+        errorFieldMap={{ allocate: "allocations" }}>
+        <VoucherFields presetBill={voucher ? null : params.get("bill")} />
+      </BaseForm>
+    </>
+  );
+}
+
+function VoucherFields({ presetBill }: { presetBill: string | null }) {
+  const { setValue } = useFormContext();
+  const supplier = useWatch({ name: "supplier" }) as number | null;
+  const amount = useWatch({ name: "amount" }) as string;
+  const open = useOpenBills(supplier);
+  useEffect(() => {
+    const bill = presetBill && open.data?.results.find((b: any) => String(b.id) === presetBill);
+    if (bill) { setValue("amount", bill.balance_due); setValue("allocations", { [bill.id]: bill.balance_due }); }
+  }, [presetBill, open.data, setValue]);
+  return (
+    <>
+      <FormSection title="Payment">
+        <FormField name="supplier" label="Supplier" type="entity" resource="suppliers" required span={2}
+          onValueChange={() => setValue("allocations", {})} />
+        <FormField name="date" label="Payment date" type="date" required />
+        <FormField name="amount" label="Amount" type="money" required
+          rules={{ validate: (v: any) => (toNumber(v) > 0) || "Enter the amount paid." }} />
+        <PaymentMethodFields accountField="paid_from_account" accountLabel="Paid from" />
+        <FormField name="notes" label="Notes" />
+      </FormSection>
+      <Panel title="Apply to bills">
+        {!supplier ? <p className="p-4 text-xs text-slate-500">Choose a supplier to see open bills.</p>
+          : open.isLoading ? <LoadingBlock /> : open.error ? <ErrorState error={open.error} onRetry={() => open.refetch()} /> : (
+            <AllocationField name="allocations" documents={toOpenBills(open.data)} available={toNumber(amount)} />
+          )}
+        {supplier && <p className="border-t border-line px-4 py-2 text-xs text-slate-500">Allocations are applied to the bills when the voucher is posted.</p>}
+      </Panel>
     </>
   );
 }
@@ -199,50 +178,27 @@ export function SupplierRefundDialog({ supplier, source, sourceField, max, onClo
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [date, setDate] = useState(todayIn(session?.organization?.timezone));
-  const [amount, setAmount] = useState(max);
-  const [method, setMethod] = useState<number | null>(null);
-  const [account, setAccount] = useState<number | null>(null);
-  const [reference, setReference] = useState("");
-  const [notes, setNotes] = useState("");
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const requiresRef = useMethodRequiresReference(method);
-  const submit = async () => {
-    const e: Record<string, string> = {};
-    if (!(toNumber(amount) > 0)) e.amount = "Enter the amount refunded.";
-    else if (toNumber(amount) - toNumber(max) > 0.001) e.amount = `At most ${formatAmount(max)} can be refunded.`;
-    if (!method) e.method = "Choose a payment method.";
-    if (!account) e.account = "Choose where the money was deposited.";
-    if (requiresRef && !reference.trim()) e.reference = "This payment method needs a transaction reference.";
-    setErrors(e);
-    if (Object.keys(e).length) return;
-    setSaving(true);
-    try {
-      const { data } = await api.post("/supplier-refunds/", {
-        supplier, [sourceField]: source, date, amount, payment_method: method, deposit_account: account, reference: reference.trim(), notes,
-      });
-      ["payment-vouchers", "purchase-returns", "supplier-refunds", "suppliers"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast.success(`Refund ${data.number} posted`);
-      onClose();
-      navigate(`/purchases/refunds/${data.id}`);
-    } catch (err) {
-      const fe = fieldErrors(err);
-      setErrors({ ...fe, method: fe.payment_method, account: fe.deposit_account });
-      toast.error(errorMessage(err));
-    } finally { setSaving(false); }
-  };
+  type Values = { date: string; amount: string; payment_method: number | null; deposit_account: number | null; reference: string; notes: string };
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="Refund from supplier" description={`Up to ${formatAmount(max)} can be refunded. The refund is posted immediately.`}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={submit}>Post refund</Button></>}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Date received" required error={errors.date}><DatePicker value={date} onChange={setDate} /></Field>
-        <Field label="Amount" required error={errors.amount}><NumberInput value={amount} onChange={(e) => setAmount(e.target.value)} invalid={!!errors.amount} /></Field>
-        <PaymentFields method={method} account={account} onMethod={setMethod} onAccount={setAccount} accountLabel="Deposited to" errors={errors} />
-        <Field label="Reference" required={requiresRef} error={errors.reference}><Input value={reference} onChange={(e) => setReference(e.target.value)} invalid={!!errors.reference} /></Field>
-        <Field label="Notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-      </div>
-    </Dialog>
+    <FormDialog<Values> open onOpenChange={(o) => !o && onClose()} title="Refund from supplier"
+      description={`Up to ${formatAmount(max)} can be refunded. The refund is posted immediately.`} submitLabel="Post refund"
+      defaultValues={{ date: todayIn(session?.organization?.timezone), amount: max, payment_method: null, deposit_account: null, reference: "", notes: "" }}
+      onSubmit={async (values) => {
+        const { data } = await api.post("/supplier-refunds/", { ...values, supplier, [sourceField]: source, reference: values.reference.trim() });
+        ["payment-vouchers", "purchase-returns", "supplier-refunds", "suppliers"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+        toast.success(`Refund ${data.number} posted`);
+        navigate(`/purchases/refunds/${data.id}`);
+      }}>
+      <FormGrid columns={2}>
+        <FormField name="date" label="Date received" type="date" required />
+        <FormField name="amount" label="Amount" type="money" required rules={{
+          validate: (v: any) => (toNumber(v) <= 0 ? "Enter the amount refunded."
+            : toNumber(v) - toNumber(max) > 0.001 ? `At most ${formatAmount(max)} can be refunded.` : true),
+        }} />
+        <PaymentMethodFields accountField="deposit_account" accountLabel="Deposited to" />
+        <FormField name="notes" label="Notes" />
+      </FormGrid>
+    </FormDialog>
   );
 }
 
@@ -252,28 +208,28 @@ function RequestedAllocations({ voucher }: { voucher: any }) {
   if (!requested.length) return <p className="p-4 text-xs text-slate-500">No bills selected. The full amount will be recorded as an advance.</p>;
   if (open.isLoading) return <LoadingBlock />;
   const bills: Record<number, any> = Object.fromEntries((open.data?.results ?? []).map((b: any) => [b.id, b]));
+  const rows = requested.map((a) => ({ ...a, open: bills[a.bill] as any }));
   return (
-    <table className="w-full text-[13px]">
-      <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-        <tr><th className="px-4 py-2">Bill</th><th className="px-4 py-2">Supplier invoice</th><th className="px-4 py-2">Due</th>
-          <th className="px-4 py-2 text-right">Outstanding now</th><th className="px-4 py-2 text-right">To apply</th><th className="px-4 py-2" /></tr>
-      </thead>
-      <tbody>{requested.map((a) => {
-        const bill = bills[a.bill];
-        return (
-          <tr key={a.bill} className="border-b border-line">
-            <td className="px-4 py-2"><Link className="link" to={`/purchases/bills/${a.bill}`}>{bill?.number ?? `Bill #${a.bill}`}</Link></td>
-            <td className="px-4 py-2">{bill?.supplier_invoice_number ?? "–"}</td>
-            <td className="px-4 py-2">{bill ? <DateText value={bill.due_date} /> : "–"}</td>
-            <td className="num px-4 py-2">{bill ? formatAmount(bill.balance_due) : "–"}</td>
-            <td className="num px-4 py-2">{formatAmount(a.amount)}</td>
-            <td className="px-4 py-2">{!bill ? <Badge tone="amber">No longer open</Badge> : toNumber(a.amount) > toNumber(bill.balance_due) ? <Badge tone="amber">Exceeds balance</Badge> : null}</td>
-          </tr>
-        );
-      })}</tbody>
-    </table>
+    <BaseTable rows={rows} rowKey={(r) => r.bill} columns={[
+      col.custom("bill", "Bill", (r) => <Link className="link" to={`/purchases/bills/${r.bill}`}>{r.open?.number ?? `Bill #${r.bill}`}</Link>),
+      col.custom("supplier_invoice_number", "Supplier invoice", (r) => r.open?.supplier_invoice_number ?? "–"),
+      col.custom("due_date", "Due", (r) => (r.open ? <DateText value={r.open.due_date} /> : "–")),
+      col.custom("balance_due", "Outstanding now", (r) => (r.open ? formatAmount(r.open.balance_due) : "–"), { align: "right" }),
+      col.money("amount", "To apply"),
+      col.custom("state", "", (r) => (!r.open ? <Badge tone="amber">No longer open</Badge>
+        : toNumber(r.amount) > toNumber(r.open.balance_due) ? <Badge tone="amber">Exceeds balance</Badge> : null)),
+    ]} />
   );
 }
+
+const appliedColumns: TableColumn<any>[] = [
+  col.custom("bill_number", "Bill", (a) => <Link className="link" to={`/purchases/bills/${a.bill}`}>{a.bill_number}</Link>),
+  col.custom("supplier_invoice_number", "Supplier invoice", (a) => a.supplier_invoice_number || "–"),
+  col.date("bill_date", "Bill date"),
+  col.money("bill_total", "Bill total"),
+  col.money("amount", "Applied"),
+  col.custom("is_active", "", (a) => (!a.is_active ? <Badge>Reversed</Badge> : null)),
+];
 
 export function PaymentVoucherDetail() {
   const { id } = useParams();
@@ -345,24 +301,7 @@ export function PaymentVoucherDetail() {
           <Panel title="Bills to pay on posting"><RequestedAllocations voucher={v} /></Panel>
         ) : (
           <Panel title="Applied to">
-            {!v.allocations.length ? <p className="p-4 text-xs text-slate-500">Not applied to any bill.</p> : (
-              <table className="w-full text-[13px]">
-                <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                  <tr><th className="px-4 py-2">Bill</th><th className="px-4 py-2">Supplier invoice</th><th className="px-4 py-2">Bill date</th>
-                    <th className="px-4 py-2 text-right">Bill total</th><th className="px-4 py-2 text-right">Applied</th><th className="px-4 py-2" /></tr>
-                </thead>
-                <tbody>{v.allocations.map((a: any) => (
-                  <tr key={a.id} className="border-b border-line">
-                    <td className="px-4 py-2"><Link className="link" to={`/purchases/bills/${a.bill}`}>{a.bill_number}</Link></td>
-                    <td className="px-4 py-2">{a.supplier_invoice_number || "–"}</td>
-                    <td className="px-4 py-2"><DateText value={a.bill_date} /></td>
-                    <td className="num px-4 py-2">{formatAmount(a.bill_total)}</td>
-                    <td className="num px-4 py-2">{formatAmount(a.amount)}</td>
-                    <td className="px-4 py-2">{!a.is_active && <Badge>Reversed</Badge>}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            )}
+            <BaseTable columns={appliedColumns} rows={v.allocations} empty={<p className="p-4 text-xs text-slate-500">Not applied to any bill.</p>} />
           </Panel>
         )}
         {v.notes && <Panel title="Notes"><p className="whitespace-pre-line p-4 text-[13px]">{v.notes}</p></Panel>}
@@ -388,7 +327,7 @@ export function SupplierRefundList() {
         subtitle="Money received back from suppliers against unapplied payments or debit notes. Start a refund from the voucher or debit note." />
       <ResourceList resource="supplier-refunds" dated detailPath={(r) => `/purchases/refunds/${r.id}`} searchPlaceholder="Refund no., supplier, reference…"
         filters={[{ type: "entity", name: "supplier", label: "Supplier", resource: "suppliers" }]}
-        columns={(ctx) => [col.doc("number", "Refund"), col.date("date", "Date", ctx), col.text("supplier_name", "Supplier", { flex: 2 }),
+        columns={[col.doc("number", "Refund"), col.date("date", "Date"), col.text("supplier_name", "Supplier", { flex: 2 }),
           col.text("source_number", "Against"), col.text("payment_method_name", "Method"), col.text("reference", "Reference"), col.status("status"),
           col.money("amount", "Amount")]}
         empty={{ title: "No supplier refunds", description: "Refunds are recorded from a payment voucher or debit note with an unapplied amount." }} />

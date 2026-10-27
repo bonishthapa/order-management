@@ -3,28 +3,24 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api, errorMessage } from "@/api/client";
 import { useDetail, useDocumentAction, useGet } from "@/api/hooks";
 import { DateText } from "@/calendar/DateText";
-import { DatePicker } from "@/calendar/DatePicker";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { Attachments } from "@/components/document/Attachments";
 import { DocumentLines, DocumentTotals } from "@/components/document/DocumentLines";
 import { PrintButton } from "@/components/document/PrintButton";
 import { ReverseAction } from "@/components/document/ReverseAction";
 import { DocumentTimeline } from "@/components/document/Timeline";
 import { TradeDocumentForm } from "@/components/document/TradeDocumentForm";
+import { FormDialog, FormField, FormGrid, useWatch } from "@/components/form";
+import { BaseTable, ResourceList, col, type TableColumn } from "@/components/table";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
-import { formatAmount, formatQty } from "@/utils/format";
+import { formatAmount } from "@/utils/format";
 import { linkFor } from "@/utils/links";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -46,13 +42,13 @@ export function SupplierBillList() {
           { type: "entity", name: "supplier", label: "Supplier", resource: "suppliers" },
           { type: "boolean", name: "overdue", label: "Overdue only" },
         ]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Bill", { sortable: true }),
-          col.date("bill_date", "Date", ctx, { sortable: true }),
+          col.date("bill_date", "Date", { sortable: true }),
           col.text("supplier_name", "Supplier", { flex: 2 }),
           col.text("supplier_invoice_number", "Supplier invoice"),
           col.text("order_number", "Order"),
-          col.date("due_date", "Due", ctx, { sortable: true }),
+          col.date("due_date", "Due", { sortable: true }),
           col.status("status", "Status", "status_label"),
           col.status("payment_status", "Payment", "payment_status_label"),
           col.money("grand_total", "Total", { sortable: true }),
@@ -102,37 +98,42 @@ export function SupplierBillForm() {
   );
 }
 
+function DueDateField() {
+  const billDate: string = useWatch({ name: "bill_date" });
+  return <FormField name="due_date" label="Due date" type="date" min={billDate || undefined} />;
+}
+
 function OrderBillEditDialog({ bill, onClose }: { bill: any; onClose: () => void }) {
-  const [date, setDate] = useState(bill.bill_date);
-  const [due, setDue] = useState(bill.due_date);
-  const [notes, setNotes] = useState(bill.notes);
-  const [invoiceNo, setInvoiceNo] = useState(bill.supplier_invoice_number);
-  const [errors, setErrors] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
-  const [saving, setSaving] = useState(false);
+  type Values = { bill_date: string; due_date: string; supplier_invoice_number: string; notes: string };
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="Edit draft bill" description="Lines come from the purchase order's goods receipts and cannot be changed here."
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={async () => {
-        if (!invoiceNo.trim()) return setErrors({ supplier_invoice_number: "Enter the supplier's invoice number." });
-        setSaving(true);
-        try {
-          await api.patch(`/purchase-bills/${bill.id}/`, { bill_date: date, due_date: due, notes, supplier_invoice_number: invoiceNo.trim() });
-          await queryClient.invalidateQueries({ queryKey: ["purchase-bills"] });
-          toast.success("Saved");
-          onClose();
-        } catch (e) { setErrors(fieldErrors(e)); toast.error(errorMessage(e)); } finally { setSaving(false); }
-      }}>Save</Button></>}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Bill date" error={errors.bill_date}><DatePicker value={date} onChange={setDate} /></Field>
-        <Field label="Due date" error={errors.due_date}><DatePicker value={due} onChange={setDue} min={date} /></Field>
-        <Field label="Supplier invoice number" required error={errors.supplier_invoice_number} className="sm:col-span-2">
-          <Input value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} invalid={!!errors.supplier_invoice_number} />
-        </Field>
-        <Field label="Notes" className="sm:col-span-2"><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-      </div>
-    </Dialog>
+    <FormDialog<Values> open onOpenChange={(o) => !o && onClose()} title="Edit draft bill"
+      description="Lines come from the purchase order's goods receipts and cannot be changed here."
+      defaultValues={{ bill_date: bill.bill_date, due_date: bill.due_date, supplier_invoice_number: bill.supplier_invoice_number, notes: bill.notes ?? "" }}
+      onSubmit={async (values) => {
+        await api.patch(`/purchase-bills/${bill.id}/`, { ...values, supplier_invoice_number: values.supplier_invoice_number.trim() });
+        await queryClient.invalidateQueries({ queryKey: ["purchase-bills"] });
+        toast.success("Saved");
+      }}>
+      <FormGrid columns={2}>
+        <FormField name="bill_date" label="Bill date" type="date" required />
+        <DueDateField />
+        <FormField name="supplier_invoice_number" label="Supplier invoice number" required span={2} />
+        <FormField name="notes" label="Notes" type="textarea" span={2} />
+      </FormGrid>
+    </FormDialog>
   );
 }
+
+const allocationColumns: TableColumn<any>[] = [
+  col.date("date", "Date"),
+  col.custom("source_number", "Document", (a) => (
+    <Link className="link" to={linkFor(a.source_type === "voucher" ? "payment-voucher" : "purchase-return", a.source_id)!}>{a.source_number}</Link>
+  )),
+  col.custom("source_type", "Type", (a) => (a.source_type === "voucher" ? "Payment voucher" : "Debit note")),
+  col.money("amount", "Amount"),
+  col.custom("is_active", "State", (a) => (a.is_active ? <Badge tone="green">Applied</Badge> : <Badge>Reversed</Badge>)),
+];
 
 export function SupplierBillDetail() {
   const { id } = useParams();
@@ -201,8 +202,8 @@ export function SupplierBillDetail() {
           </Panel>
           <Panel title="Items">
             <DocumentLines lines={bill.lines} extra={[
-              ...(hasGrn ? [{ key: "grn_number", label: "GRN", render: (l: any) => (l.receipt_line && l.grn_number ? l.grn_number : "–") }] : []),
-              ...(posted ? [{ key: "returned_quantity", label: "Returned", align: "right" as const, render: (l: any) => formatQty(l.returned_quantity) }] : []),
+              ...(hasGrn ? [col.custom("grn_number", "GRN", (l: any) => (l.receipt_line && l.grn_number ? l.grn_number : "–"))] : []),
+              ...(posted ? [col.qty("returned_quantity", "Returned")] : []),
             ]} />
             <div className="flex flex-col border-t border-line md:flex-row">
               <div className="flex-1 p-4 text-[13px] text-slate-600">
@@ -223,24 +224,7 @@ export function SupplierBillDetail() {
         <TabPanel value="payments">
           <Panel title="Payments and debit notes applied">
             {allocations.isLoading ? <LoadingBlock /> : allocations.error ? <ErrorState error={allocations.error} onRetry={() => allocations.refetch()} />
-              : !allocations.data?.length ? <p className="p-4 text-xs text-slate-500">Nothing applied yet.</p> : (
-                <table className="w-full text-[13px]">
-                  <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                    <tr><th className="px-4 py-2">Date</th><th className="px-4 py-2">Document</th><th className="px-4 py-2">Type</th><th className="px-4 py-2 text-right">Amount</th><th className="px-4 py-2">State</th></tr>
-                  </thead>
-                  <tbody>
-                    {allocations.data.map((a) => (
-                      <tr key={a.id} className="border-b border-line">
-                        <td className="px-4 py-2"><DateText value={a.date} /></td>
-                        <td className="px-4 py-2"><Link className="link" to={linkFor(a.source_type === "voucher" ? "payment-voucher" : "purchase-return", a.source_id)!}>{a.source_number}</Link></td>
-                        <td className="px-4 py-2">{a.source_type === "voucher" ? "Payment voucher" : "Debit note"}</td>
-                        <td className="num px-4 py-2">{formatAmount(a.amount)}</td>
-                        <td className="px-4 py-2">{a.is_active ? <Badge tone="green">Applied</Badge> : <Badge>Reversed</Badge>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+              : <BaseTable columns={allocationColumns} rows={allocations.data} empty={<p className="p-4 text-xs text-slate-500">Nothing applied yet.</p>} />}
           </Panel>
         </TabPanel>
         <TabPanel value="activity"><DocumentTimeline resource="purchase-bills" id={bill.id} /></TabPanel>

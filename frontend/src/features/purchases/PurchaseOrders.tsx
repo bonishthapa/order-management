@@ -3,25 +3,22 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api } from "@/api/client";
 import { useDetail, useDocumentAction } from "@/api/hooks";
-import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
 import { todayIn } from "@/calendar/bs";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { Attachments } from "@/components/document/Attachments";
 import { DocumentLines, DocumentTotals } from "@/components/document/DocumentLines";
 import { PrintButton } from "@/components/document/PrintButton";
 import { DocumentTimeline } from "@/components/document/Timeline";
 import { TradeDocumentForm } from "@/components/document/TradeDocumentForm";
+import { FormDialog, FormField, FormGrid } from "@/components/form";
+import { ResourceList, col } from "@/components/table";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input } from "@/components/ui/Input";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/Menu";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { TabList, TabPanel, Tabs } from "@/components/ui/Tabs";
@@ -51,12 +48,12 @@ export function PurchaseOrderList() {
         filters={[{ type: "select", name: "status", label: "Status", options: PO_STATUSES },
           { type: "entity", name: "supplier", label: "Supplier", resource: "suppliers" },
           { type: "entity", name: "warehouse", label: "Warehouse", resource: "warehouses" }]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Order", { sortable: true }),
-          col.date("order_date", "Date", ctx, { sortable: true }),
+          col.date("order_date", "Date", { sortable: true }),
           col.text("supplier_name", "Supplier", { flex: 2 }),
-          col.text("warehouse_code", "Warehouse", { maxWidth: 120 }),
-          col.date("expected_delivery_date", "Expected", ctx, { sortable: true }),
+          col.text("warehouse_code", "Warehouse", { width: 120 }),
+          col.date("expected_delivery_date", "Expected", { sortable: true }),
           col.status("status", "Status", "status_label"),
           col.money("grand_total", "Amount", { sortable: true }),
         ]}
@@ -107,46 +104,29 @@ function CreateBillDialog({ order, onClose }: { order: any; onClose: () => void 
   const { session } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [billDate, setBillDate] = useState(todayIn(session?.organization?.timezone));
-  const [invoiceNo, setInvoiceNo] = useState("");
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const submit = async () => {
-    if (!invoiceNo.trim()) return setErrors({ supplier_invoice_number: "Enter the supplier's invoice number." });
-    setErrors({});
-    setSaving(true);
-    try {
-      const { data: lines } = await api.get(`/purchase-orders/${order.id}/billable/`);
-      if (!lines.length) throw new Error("Nothing to bill yet: receive the goods first.");
-      const { data } = await api.post("/purchase-bills/", {
-        supplier: order.supplier, purchase_order: order.id, bill_date: billDate, supplier_invoice_number: invoiceNo.trim(),
-        lines: lines.map((l: any) => ({
-          receipt_line: l.receipt_line, order_line: l.order_line, product: l.product, quantity: l.quantity, unit_price: l.unit_price,
-          discount_percent: l.discount_percent, tax_rate: l.tax_rate, description: "",
-        })),
-      });
-      ["purchase-bills", "purchase-orders"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast.success("Draft bill created");
-      onClose();
-      navigate(`/purchases/bills/${data.id}`);
-    } catch (e) {
-      setErrors(fieldErrors(e));
-      toast.error(errorMessage(e));
-    } finally {
-      setSaving(false);
-    }
+  const submit = async (values: { supplier_invoice_number: string; bill_date: string }) => {
+    const { data: lines } = await api.get(`/purchase-orders/${order.id}/billable/`);
+    if (!lines.length) throw new Error("Nothing to bill yet: receive the goods first.");
+    const { data } = await api.post("/purchase-bills/", {
+      supplier: order.supplier, purchase_order: order.id, bill_date: values.bill_date, supplier_invoice_number: values.supplier_invoice_number.trim(),
+      lines: lines.map((l: any) => ({
+        receipt_line: l.receipt_line, order_line: l.order_line, product: l.product, quantity: l.quantity, unit_price: l.unit_price,
+        discount_percent: l.discount_percent, tax_rate: l.tax_rate, description: "",
+      })),
+    });
+    ["purchase-bills", "purchase-orders"].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+    toast.success("Draft bill created");
+    navigate(`/purchases/bills/${data.id}`);
   };
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={`Create bill for ${order.number}`}
+    <FormDialog open onOpenChange={(o) => !o && onClose()} title={`Create bill for ${order.number}`}
       description="The draft bill includes every received but unbilled quantity and unbilled service lines. Review it before posting."
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={submit}>Create draft bill</Button></>}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Supplier invoice number" required error={errors.supplier_invoice_number}>
-          <Input autoFocus value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} invalid={!!errors.supplier_invoice_number} />
-        </Field>
-        <Field label="Bill date" required error={errors.bill_date}><DatePicker value={billDate} onChange={setBillDate} min={order.order_date} /></Field>
-      </div>
-    </Dialog>
+      defaultValues={{ supplier_invoice_number: "", bill_date: todayIn(session?.organization?.timezone) }} onSubmit={submit} submitLabel="Create draft bill">
+      <FormGrid columns={2}>
+        <FormField name="supplier_invoice_number" label="Supplier invoice number" required autoFocus />
+        <FormField name="bill_date" label="Bill date" type="date" required min={order.order_date} />
+      </FormGrid>
+    </FormDialog>
   );
 }
 
@@ -247,9 +227,9 @@ export function PurchaseOrderDetail() {
           </div>
           <Panel title="Items">
             <DocumentLines lines={lines} extra={[
-              { key: "received_quantity", label: "Received", align: "right", render: (l) => (l.is_stock ? formatQty(l.received_quantity) : "–") },
-              { key: "rejected_quantity", label: "Rejected", align: "right", render: (l) => (l.is_stock ? formatQty(l.rejected_quantity) : "–") },
-              { key: "billed_quantity", label: "Billed", align: "right", render: (l) => formatQty(l.billed_quantity) },
+              col.custom("received_quantity", "Received", (l: any) => (l.is_stock ? formatQty(l.received_quantity) : "–"), { align: "right" }),
+              col.custom("rejected_quantity", "Rejected", (l: any) => (l.is_stock ? formatQty(l.rejected_quantity) : "–"), { align: "right" }),
+              col.qty("billed_quantity", "Billed"),
             ]} />
             <div className="flex flex-col border-t border-line md:flex-row">
               <div className="flex-1 space-y-3 p-4 text-[13px] text-slate-600">

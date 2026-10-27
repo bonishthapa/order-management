@@ -5,7 +5,7 @@ import { api } from "@/api/client";
 import { useFiscalYear } from "@/app/FiscalYearContext";
 import { useAuth } from "@/auth/AuthContext";
 import { DateText } from "@/calendar/DateText";
-import { StatusBadge } from "@/components/ui/Badge";
+import { BaseTable, col } from "@/components/table";
 import { ErrorState, LoadingBlock } from "@/components/ui/Feedback";
 import { PageHeader, Panel } from "@/components/ui/Page";
 import { cn } from "@/utils/cn";
@@ -114,26 +114,15 @@ export function Dashboard() {
       <div className="mt-4 grid gap-4 xl:grid-cols-3">
         {data.recent_invoices && (
           <Panel title="Recent invoices" className="xl:col-span-2" actions={<Link className="link text-xs" to="/sales/invoices">All invoices</Link>}>
-            {data.recent_invoices.length === 0 ? <p className="p-4 text-xs text-slate-500">No invoices posted yet.</p> : (
-              <table className="w-full text-[13px]">
-                <thead className="border-b border-line bg-surface-muted text-left text-xs text-slate-500">
-                  <tr><th className="px-4 py-2">Invoice</th><th className="px-4 py-2">Customer</th><th className="hidden px-4 py-2 md:table-cell">Date</th>
-                    <th className="px-4 py-2 text-right">Total</th><th className="px-4 py-2 text-right">Due</th><th className="px-4 py-2">Payment</th></tr>
-                </thead>
-                <tbody>
-                  {data.recent_invoices.map((i: any) => (
-                    <tr key={i.id} className="cursor-pointer border-b border-line last:border-0 hover:bg-surface-muted" onClick={() => navigate(`/sales/invoices/${i.id}`)}>
-                      <td className="px-4 py-2 font-medium text-brand-700">{i.number}</td>
-                      <td className="max-w-[220px] truncate px-4 py-2">{i.customer}</td>
-                      <td className="hidden px-4 py-2 text-xs md:table-cell"><DateText value={i.date} bs={i.date_bs} /></td>
-                      <td className="num px-4 py-2">{formatAmount(i.total)}</td>
-                      <td className="num px-4 py-2">{formatAmount(i.balance_due)}</td>
-                      <td className="px-4 py-2"><StatusBadge status={i.payment_status} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            <BaseTable rows={data.recent_invoices} onRowClick={(i: any) => navigate(`/sales/invoices/${i.id}`)}
+              empty={<p className="p-4 text-xs text-slate-500">No invoices posted yet.</p>} columns={[
+                col.doc("number", "Invoice"),
+                col.text("customer", "Customer", { maxWidth: 220, className: "truncate" }),
+                col.date("date", "Date", { className: "hidden text-xs md:table-cell", headerClassName: "hidden md:table-cell" }),
+                col.money("total", "Total"),
+                col.money("balance_due", "Due"),
+                col.status("payment_status", "Payment"),
+              ]} />
           </Panel>
         )}
         {data.finance && (
@@ -156,18 +145,14 @@ export function Dashboard() {
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         {data.low_stock && (
           <Panel title="Low stock" actions={<span className="text-2xs text-slate-500">{data.inventory.low_stock_count} at or below reorder level</span>}>
-            {data.low_stock.length === 0 ? <p className="p-4 text-xs text-slate-500">All products are above their reorder levels.</p> : (
-              <table className="w-full text-[13px]">
-                <thead className="border-b border-line text-left text-xs text-slate-500"><tr><th className="px-4 py-1.5">Product</th><th className="px-4 py-1.5 text-right">On hand</th><th className="px-4 py-1.5 text-right">Reorder at</th></tr></thead>
-                <tbody>{data.low_stock.map((p: any) => (
-                  <tr key={p.id} className="border-b border-line last:border-0">
-                    <td className="max-w-[200px] truncate px-4 py-1.5"><Link className="hover:text-brand-700" to={`/inventory/products/${p.id}`}>{p.name}</Link></td>
-                    <td className={cn("num px-4 py-1.5", Number(p.on_hand) <= 0 && "text-red-700")}>{formatQty(p.on_hand)} {p.unit}</td>
-                    <td className="num px-4 py-1.5 text-slate-500">{formatQty(p.reorder_level)}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            )}
+            <BaseTable rows={data.low_stock} density="compact"
+              empty={<p className="p-4 text-xs text-slate-500">All products are above their reorder levels.</p>} columns={[
+                col.custom("name", "Product", (p: any) => <Link className="hover:text-brand-700" to={`/inventory/products/${p.id}`}>{p.name}</Link>,
+                  { maxWidth: 200, className: "truncate" }),
+                col.custom("on_hand", "On hand", (p: any) => <span className={cn(Number(p.on_hand) <= 0 && "text-red-700")}>{formatQty(p.on_hand)} {p.unit}</span>,
+                  { align: "right" }),
+                col.qty("reorder_level", "Reorder at", { className: "text-slate-500" }),
+              ]} />
           </Panel>
         )}
         {data.top_products && (

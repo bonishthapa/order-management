@@ -1,66 +1,50 @@
-import { useState } from "react";
 import { toast } from "sonner";
-import { api, errorMessage } from "@/api/client";
+import { api } from "@/api/client";
+import { BaseForm, FormField } from "@/components/form";
 import { useAuth } from "@/auth/AuthContext";
-import { Button } from "@/components/ui/Button";
-import { Alert } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { Input, Select } from "@/components/ui/Input";
 import { PageHeader, Panel } from "@/components/ui/Page";
-import type { DateDisplayMode } from "@/api/types";
 
 function PasswordForm({ onDone }: { onDone?: () => void }) {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   return (
-    <form className="space-y-3 p-4" onSubmit={async (e) => {
-      e.preventDefault();
-      setError(null);
-      if (next !== confirm) return setError("The new passwords do not match.");
-      setSaving(true);
-      try {
-        await api.post("/auth/change-password/", { current_password: current, new_password: next });
+    <BaseForm className="p-4" submitLabel="Change password" warnUnsaved={false}
+      defaultValues={{ current_password: "", new_password: "", confirm: "" }}
+      onSubmit={async (values, form) => {
+        if (values.new_password !== values.confirm) {
+          form.setError("confirm", { message: "The new passwords do not match." });
+          return;
+        }
+        await api.post("/auth/change-password/", { current_password: values.current_password, new_password: values.new_password });
         toast.success("Password changed");
-        setCurrent(""); setNext(""); setConfirm("");
+        form.reset();
         onDone?.();
-      } catch (err) { setError(errorMessage(err)); }
-      setSaving(false);
-    }}>
-      {error && <Alert tone="error">{error}</Alert>}
-      <Field label="Current password" htmlFor="cur"><Input id="cur" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} /></Field>
-      <Field label="New password" htmlFor="new" hint="At least 10 characters; avoid common passwords."><Input id="new" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} /></Field>
-      <Field label="Confirm new password" htmlFor="conf"><Input id="conf" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} /></Field>
-      <Button type="submit" variant="primary" loading={saving}>Change password</Button>
-    </form>
+      }}>
+      <FormField name="current_password" label="Current password" type="password" required />
+      <FormField name="new_password" label="New password" type="password" required hint="At least 10 characters; avoid common passwords." />
+      <FormField name="confirm" label="Confirm new password" type="password" required />
+    </BaseForm>
   );
 }
 
 export function AccountPage() {
-  const { session, dateMode, setDateMode, reload } = useAuth();
+  const { session, dateMode, reload } = useAuth();
   const user = session!.user;
-  const [name, setName] = useState(user.full_name);
-  const [phone, setPhone] = useState(user.phone);
   return (
     <>
       <PageHeader title="My account" subtitle={user.email} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="Profile">
-          <div className="space-y-3 p-4">
-            <Field label="Full name"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
-            <Field label="Phone"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
-            <Field label="Show dates in" hint="Overrides the company default for you only.">
-              <Select value={dateMode} onChange={(e) => setDateMode(e.target.value as DateDisplayMode)}>
-                <option value="AD_BS">AD + BS</option><option value="BS">BS only</option><option value="AD">AD only</option>
-              </Select>
-            </Field>
-            <Button variant="primary" onClick={async () => {
-              try { await api.patch("/auth/me/", { full_name: name, phone }); await reload(); toast.success("Profile saved"); }
-              catch (e) { toast.error(errorMessage(e)); }
-            }}>Save profile</Button>
-          </div>
+          <BaseForm className="p-4" submitLabel="Save profile" warnUnsaved={false}
+            defaultValues={{ full_name: user.full_name, phone: user.phone, date_display_mode: dateMode }}
+            onSubmit={async (values) => {
+              await api.patch("/auth/me/", values);
+              await reload();
+              toast.success("Profile saved");
+            }}>
+            <FormField name="full_name" label="Full name" required />
+            <FormField name="phone" label="Phone" type="tel" />
+            <FormField name="date_display_mode" label="Show dates in" type="select" emptyOption={false} hint="Overrides the company default for you only."
+              options={[{ value: "AD_BS", label: "AD + BS" }, { value: "BS", label: "BS only" }, { value: "AD", label: "AD only" }]} />
+          </BaseForm>
         </Panel>
         <Panel title="Password"><PasswordForm /></Panel>
       </div>

@@ -1,30 +1,26 @@
-import { DocumentTimeline } from "@/components/document/Timeline";
-import { PackageCheck, Pencil, Plus, Send, Trash2, XCircle } from "lucide-react";
+import { PackageCheck, Pencil, Plus, Send, XCircle } from "lucide-react";
 import { useState } from "react";
-import { Controller, useFieldArray, useForm, useWatch, type Control, type FieldErrors, type UseFormRegister } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage, fieldErrors } from "@/api/client";
+import { api } from "@/api/client";
 import { useDetail, useDocumentAction, useList } from "@/api/hooks";
 import { todayIn } from "@/calendar/bs";
-import { DatePicker } from "@/calendar/DatePicker";
 import { DateText } from "@/calendar/DateText";
 import { useAuth } from "@/auth/AuthContext";
-import { col } from "@/components/data/columns";
-import { ResourceList } from "@/components/data/ResourceList";
 import { DocumentLines } from "@/components/document/DocumentLines";
+import { DocumentTimeline } from "@/components/document/Timeline";
+import { BaseForm, CellInput, FormDialog, FormField, FormGrid, FormSection, useFieldArray, useFormContext, useWatch } from "@/components/form";
 import { EntitySelect } from "@/components/forms/EntitySelect";
+import { BaseTable, ResourceList, col } from "@/components/table";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/Dialog";
 import { Alert, ErrorState, LoadingBlock } from "@/components/ui/Feedback";
-import { Field } from "@/components/ui/Field";
-import { NumberInput, Select, Textarea } from "@/components/ui/Input";
 import { KeyValues, PageHeader, Panel } from "@/components/ui/Page";
 import { formatAmount, formatDateTime, formatQty, toNumber } from "@/utils/format";
 import { cn } from "@/utils/cn";
-import { parseSerials, useBalance, useBatches } from "./Movements";
+import { BatchSelect, CellError, LineSerials, RemoveLineButton, parseSerials, useBalance, useBatches, useLineError, useLineProduct } from "./Movements";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const TRANSFER_STATUSES = [
@@ -47,13 +43,13 @@ export function TransferList() {
           { type: "entity", name: "source_warehouse", label: "From", resource: "warehouses" },
           { type: "entity", name: "destination_warehouse", label: "To", resource: "warehouses" },
         ]}
-        columns={(ctx) => [
+        columns={[
           col.doc("number", "Transfer"),
-          col.date("date", "Date", ctx),
+          col.date("date", "Date"),
           col.text("source_name", "From", { flex: 2, minWidth: 180 }),
           col.text("destination_name", "To", { flex: 2, minWidth: 180 }),
-          col.number("line_count", "Lines", { valueGetter: (p: any) => p.data?.lines?.length ?? 0, maxWidth: 100 }),
-          col.date("received_date", "Received", ctx),
+          col.number("line_count", "Lines", { value: (r: any) => r.lines?.length ?? 0, render: (r: any) => r.lines?.length ?? 0, width: 90 }),
+          col.date("received_date", "Received"),
           col.status("status"),
         ]}
         empty={{ title: "No transfers", description: "Create a transfer to move stock between warehouses." }} />
@@ -85,17 +81,6 @@ function TransferFormBody({ initial }: { initial?: any }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAuth();
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const { control, register, handleSubmit, setError, formState: { errors } } = useForm<TransferValues>({
-    defaultValues: initial ? {
-      source_warehouse: initial.source_warehouse, destination_warehouse: initial.destination_warehouse, date: initial.date, notes: initial.notes ?? "",
-      lines: initial.lines.map((l: any) => ({ product: l.product, quantity: String(Number(l.quantity)), batch_number: l.batch_number ?? "",
-        serials: (l.serial_numbers ?? []).join("\n") })),
-    } : { source_warehouse: null, destination_warehouse: null, date: todayIn(session?.organization?.timezone), notes: "", lines: [emptyTransferLine()] },
-  });
-  const { fields, append, remove } = useFieldArray({ control, name: "lines" });
-  const source = useWatch({ control, name: "source_warehouse" });
 
   if (initial && initial.status !== "DRAFT") {
     return (
@@ -106,158 +91,129 @@ function TransferFormBody({ initial }: { initial?: any }) {
     );
   }
 
-  const onSubmit = handleSubmit(async (values) => {
-    setFormError(null);
-    let invalid = false;
-    if (!values.source_warehouse) { setError("source_warehouse", { message: "Choose the source warehouse." }); invalid = true; }
-    if (!values.destination_warehouse) { setError("destination_warehouse", { message: "Choose the destination warehouse." }); invalid = true; }
-    if (values.source_warehouse && values.source_warehouse === values.destination_warehouse) {
-      setError("destination_warehouse", { message: "Choose a different destination warehouse." }); invalid = true;
-    }
-    const seen = new Set<number>();
-    values.lines.forEach((l, i) => {
-      if (!l.product) { setError(`lines.${i}.product`, { message: "Choose a product." }); invalid = true; }
-      else if (seen.has(l.product)) { setError(`lines.${i}.product`, { message: "List each product once per transfer." }); invalid = true; }
-      if (l.product) seen.add(l.product);
-      if (!(toNumber(l.quantity) > 0)) { setError(`lines.${i}.quantity`, { message: "Enter a positive quantity." }); invalid = true; }
-    });
-    if (!values.lines.length) { setFormError("Add at least one line."); invalid = true; }
-    if (invalid) return;
-    const payload = {
-      source_warehouse: values.source_warehouse, destination_warehouse: values.destination_warehouse, date: values.date, notes: values.notes,
-      lines: values.lines.map((l) => ({ product: l.product, quantity: l.quantity, batch_number: l.batch_number, serial_numbers: parseSerials(l.serials) })),
-    };
-    setSaving(true);
-    try {
-      const { data } = initial ? await api.patch(`/stock-transfers/${initial.id}/`, payload) : await api.post("/stock-transfers/", payload);
-      queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
-      toast.success(initial ? "Transfer updated" : "Draft transfer saved");
-      navigate(`/inventory/transfers/${data.id}`);
-    } catch (err) {
-      Object.entries(fieldErrors(err)).forEach(([k, message]) => setError(k as any, { message }));
-      setFormError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  });
+  const defaultValues: TransferValues = initial ? {
+    source_warehouse: initial.source_warehouse, destination_warehouse: initial.destination_warehouse, date: initial.date, notes: initial.notes ?? "",
+    lines: initial.lines.map((l: any) => ({ product: l.product, quantity: String(Number(l.quantity)), batch_number: l.batch_number ?? "",
+      serials: (l.serial_numbers ?? []).join("\n") })),
+  } : { source_warehouse: null, destination_warehouse: null, date: todayIn(session?.organization?.timezone), notes: "", lines: [emptyTransferLine()] };
 
   return (
     <>
       <PageHeader title={initial ? `Edit draft transfer #${initial.id}` : "New stock transfer"}
         back={initial ? { to: `/inventory/transfers/${initial.id}`, label: "Transfer" } : { to: "/inventory/transfers", label: "Stock transfers" }}
         subtitle="Saved as a draft. Stock leaves the source warehouse only when the transfer is dispatched." />
-      <div className="space-y-4">
-        {formError && <Alert tone="error">{formError}</Alert>}
-        <Panel title="Transfer">
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="From warehouse" required error={errors.source_warehouse?.message}>
-              <Controller control={control} name="source_warehouse" render={({ field }) => (
-                <EntitySelect resource="warehouses" value={field.value} onChange={(v) => field.onChange(v)} invalid={!!errors.source_warehouse} />
-              )} />
-            </Field>
-            <Field label="To warehouse" required error={errors.destination_warehouse?.message}>
-              <Controller control={control} name="destination_warehouse" render={({ field }) => (
-                <EntitySelect resource="warehouses" value={field.value} onChange={(v) => field.onChange(v)} invalid={!!errors.destination_warehouse} />
-              )} />
-            </Field>
-            <Field label="Dispatch date" required error={errors.date?.message}>
-              <Controller control={control} name="date" render={({ field }) => <DatePicker value={field.value} onChange={field.onChange} />} />
-            </Field>
-            <Field label="Notes"><Textarea rows={1} {...register("notes")} /></Field>
-          </div>
-        </Panel>
-        <Panel title="Items" actions={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => append(emptyTransferLine())}>Add line</Button>}>
-          {!source && <p className="px-4 pt-3 text-xs text-slate-500">Choose the source warehouse to see available stock.</p>}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-[13px]">
-              <thead className="border-b border-line bg-surface-muted text-left text-xs font-semibold text-slate-500">
-                <tr>
-                  <th className="w-8 px-2 py-2">#</th>
-                  <th className="min-w-[260px] px-2 py-2">Product</th>
-                  <th className="w-36 px-2 py-2 text-right">Available at source</th>
-                  <th className="w-32 px-2 py-2 text-right">Quantity</th>
-                  <th className="w-48 px-2 py-2">Batch</th>
-                  <th className="min-w-[180px] px-2 py-2">Serial numbers</th>
-                  <th className="w-10 px-2 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {fields.map((f, index) => (
-                  <TransferLineRow key={f.id} index={index} control={control} register={register} errors={errors} source={source}
-                    onRemove={fields.length > 1 ? () => remove(index) : undefined} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => navigate(-1)}>Cancel</Button>
-          <Button variant="primary" loading={saving} onClick={onSubmit}>{initial ? "Save changes" : "Save draft"}</Button>
-        </div>
-      </div>
+      <BaseForm<TransferValues> defaultValues={defaultValues} submitLabel={initial ? "Save changes" : "Save draft"} onCancel={() => navigate(-1)}
+        onSubmit={async (values, form) => {
+          form.clearErrors("lines");
+          let invalid = false;
+          const fail = (name: string, message: string) => { form.setError(name as any, { type: "manual", message }); invalid = true; };
+          if (values.source_warehouse && values.source_warehouse === values.destination_warehouse) {
+            fail("destination_warehouse", "Choose a different destination warehouse.");
+          }
+          if (!values.lines.length) fail("lines", "Add at least one line.");
+          const seen = new Set<number>();
+          values.lines.forEach((l, i) => {
+            if (!l.product) fail(`lines.${i}.product`, "Choose a product.");
+            else if (seen.has(l.product)) fail(`lines.${i}.product`, "List each product once per transfer.");
+            if (l.product) seen.add(l.product);
+            if (!(toNumber(l.quantity) > 0)) fail(`lines.${i}.quantity`, "Enter a positive quantity.");
+          });
+          if (invalid) throw new Error("Correct the highlighted fields.");
+          const payload = {
+            source_warehouse: values.source_warehouse, destination_warehouse: values.destination_warehouse, date: values.date, notes: values.notes,
+            lines: values.lines.map((l) => ({ product: l.product, quantity: l.quantity, batch_number: l.batch_number, serial_numbers: parseSerials(l.serials) })),
+          };
+          const { data } = initial ? await api.patch(`/stock-transfers/${initial.id}/`, payload) : await api.post("/stock-transfers/", payload);
+          queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+          toast.success(initial ? "Transfer updated" : "Draft transfer saved");
+          navigate(`/inventory/transfers/${data.id}`);
+        }}>
+        <FormSection title="Transfer" columns={4}>
+          <FormField name="source_warehouse" label="From warehouse" type="entity" resource="warehouses" required />
+          <FormField name="destination_warehouse" label="To warehouse" type="entity" resource="warehouses" required />
+          <FormField name="date" label="Dispatch date" type="date" required />
+          <FormField name="notes" label="Notes" type="textarea" rows={1} />
+        </FormSection>
+        <TransferLines />
+      </BaseForm>
     </>
   );
 }
 
-function TransferLineRow({ index, control, register, errors, source, onRemove }: {
-  index: number; control: Control<TransferValues>; register: UseFormRegister<TransferValues>; errors: FieldErrors<TransferValues>;
-  source: number | null; onRemove?: () => void;
-}) {
-  const productId = useWatch({ control, name: `lines.${index}.product` });
-  const quantity = useWatch({ control, name: `lines.${index}.quantity` });
-  const product = useDetail<any>("products", productId ?? undefined, { enabled: !!productId, staleTime: 60_000 });
-  const p = product.data;
-  const balance = useBalance(source, productId);
-  const batches = useBatches(productId, source, !!p?.track_batches);
-  const short = !!productId && !!source && !balance.loading && toNumber(quantity) > toNumber(balance.available);
-  const err = (errors.lines?.[index] ?? {}) as any;
+function TransferLines() {
+  const { control, formState } = useFormContext<TransferValues>();
+  const { fields, append, remove } = useFieldArray({ control, name: "lines" });
+  const source = useWatch({ control, name: "source_warehouse" });
+  const linesError = (formState.errors as any).lines?.message ?? (formState.errors as any).lines?.root?.message;
+  const rows = fields.map((f, index) => ({ id: f.id, index }));
   return (
-    <tr className="border-b border-line align-top">
-      <td className="px-2 py-1.5 pt-3 text-xs text-slate-400">{index + 1}</td>
-      <td className="px-2 py-1.5">
-        <Controller control={control} name={`lines.${index}.product`} render={({ field }) => (
-          <EntitySelect resource="products" params={{ product_type: "STOCK", is_active: "true", warehouse: source ?? "" }} value={field.value}
-            onChange={(v) => field.onChange(v)} invalid={!!err.product}
-            sublabel={(item) => (source ? `On hand ${formatQty(item.on_hand)} ${item.unit_code}` : item.unit_code)} />
-        )} />
-        {err.product?.message && <p className="mt-0.5 text-xs text-red-600">{err.product.message}</p>}
-      </td>
-      <td className="num px-2 py-1.5 pt-2.5">
-        {!productId || !source ? <span className="text-slate-400">–</span> : balance.loading ? <span className="text-slate-400">…</span> : (
-          <span className={cn(short && "font-medium text-red-700")}>
-            {formatQty(balance.available)} <span className="text-2xs text-slate-400">{p?.unit_code}</span>
-            {toNumber(balance.reserved) > 0 && <span className="block text-2xs text-slate-400">{formatQty(balance.reserved)} reserved</span>}
-          </span>
-        )}
-      </td>
-      <td className="px-2 py-1.5">
-        <NumberInput {...register(`lines.${index}.quantity`)} invalid={!!err.quantity || short} />
-        {err.quantity?.message ? <p className="mt-0.5 text-xs text-red-600">{err.quantity.message}</p>
-          : short && <p className="mt-0.5 text-xs text-red-600">More than available.</p>}
-      </td>
-      <td className="px-2 py-1.5">
-        {p?.track_batches ? (
-          <Select {...register(`lines.${index}.batch_number`)}>
-            <option value="">Choose batch…</option>
-            {(batches.data?.results ?? []).map((b: any) => (
-              <option key={b.id} value={b.batch_number}>{b.batch_number} · {formatQty(b.quantity)}{b.expiry_date ? ` · exp ${b.expiry_date}` : ""}</option>
-            ))}
-          </Select>
-        ) : <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>}
-      </td>
-      <td className="px-2 py-1.5">
-        {p?.track_serials ? <Textarea rows={2} {...register(`lines.${index}.serials`)} placeholder="One per line or comma separated" />
-          : <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>}
-      </td>
-      <td className="px-2 py-1.5 pt-2">
-        {onRemove && (
-          <button type="button" aria-label="Remove line" onClick={onRemove} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </td>
-    </tr>
+    <Panel title="Items" actions={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => append(emptyTransferLine())}>Add line</Button>}>
+      {!source && <p className="px-4 pt-3 text-xs text-slate-500">Choose the source warehouse to see available stock.</p>}
+      {linesError && <Alert tone="error" className="m-4">{linesError}</Alert>}
+      <BaseTable rows={rows} rowKey={(r) => r.id} minWidth={860} density="compact" columns={[
+        col.custom("n", "#", (r) => <span className="text-xs text-slate-400">{r.index + 1}</span>, { width: 32, className: "pt-3" }),
+        col.custom("product", "Product", (r) => <TransferLineProduct index={r.index} source={source} />, { minWidth: 260 }),
+        col.custom("available", "Available at source", (r) => <TransferLineAvailable index={r.index} source={source} />, { width: 144, align: "right", className: "pt-2.5" }),
+        col.custom("quantity", "Quantity", (r) => <TransferLineQuantity index={r.index} source={source} />, { width: 128, align: "right" }),
+        col.custom("batch_number", "Batch", (r) => <TransferLineBatch index={r.index} source={source} />, { width: 192 }),
+        col.custom("serials", "Serial numbers", (r) => <LineSerials index={r.index} />, { minWidth: 180 }),
+        col.custom("remove", "", (r) => (fields.length > 1 ? <RemoveLineButton onClick={() => remove(r.index)} /> : null), { width: 40 }),
+      ]} />
+    </Panel>
   );
+}
+
+function TransferLineProduct({ index, source }: { index: number; source: number | null }) {
+  const { setValue, clearErrors } = useFormContext();
+  const { productId } = useLineProduct(index);
+  const error = useLineError(index, "product");
+  return (
+    <>
+      <EntitySelect resource="products" params={{ product_type: "STOCK", is_active: "true", warehouse: source ?? "" }} value={productId} invalid={!!error}
+        onChange={(v) => { setValue(`lines.${index}.product`, v, { shouldDirty: true }); clearErrors(`lines.${index}.product`); }}
+        sublabel={(item) => (source ? `On hand ${formatQty(item.on_hand)} ${item.unit_code}` : item.unit_code)} />
+      <CellError message={error} />
+    </>
+  );
+}
+
+/** True when the line asks for more than is available at the source. */
+function useShortage(index: number, source: number | null) {
+  const quantity = useWatch({ name: `lines.${index}.quantity` }) as string;
+  const { productId, product } = useLineProduct(index);
+  const balance = useBalance(source, productId);
+  const short = !!productId && !!source && !balance.loading && toNumber(quantity) > toNumber(balance.available);
+  return { productId, product, balance, short };
+}
+
+function TransferLineAvailable({ index, source }: { index: number; source: number | null }) {
+  const { productId, product, balance, short } = useShortage(index, source);
+  if (!productId || !source) return <span className="text-slate-400">–</span>;
+  if (balance.loading) return <span className="text-slate-400">…</span>;
+  return (
+    <span className={cn(short && "font-medium text-red-700")}>
+      {formatQty(balance.available)} <span className="text-2xs text-slate-400">{product?.unit_code}</span>
+      {toNumber(balance.reserved) > 0 && <span className="block text-2xs text-slate-400">{formatQty(balance.reserved)} reserved</span>}
+    </span>
+  );
+}
+
+function TransferLineQuantity({ index, source }: { index: number; source: number | null }) {
+  const { short } = useShortage(index, source);
+  const error = useLineError(index, "quantity");
+  return (
+    <>
+      <CellInput number name={`lines.${index}.quantity`} label="Quantity" invalid={short} />
+      {!error && short && <CellError message="More than available." />}
+    </>
+  );
+}
+
+function TransferLineBatch({ index, source }: { index: number; source: number | null }) {
+  const { productId, product: p } = useLineProduct(index);
+  const batches = useBatches(productId, source, !!p?.track_batches);
+  if (!p?.track_batches) return <span className="block pt-2 text-xs text-slate-400">{p ? "Not tracked" : "–"}</span>;
+  return <BatchSelect name={`lines.${index}.batch_number`} batches={batches.data?.results ?? []} />;
 }
 
 // --- Detail ----------------------------------------------------------------------------------------
@@ -268,11 +224,11 @@ export function TransferDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { can, session } = useAuth();
+  const queryClient = useQueryClient();
   const query = useDetail<any>("stock-transfers", id);
   const action = useDocumentAction<any>("stock-transfers", id, ["stock-movements", "inventory/ledger"]);
   const movements = useList<any>("stock-movements", { reference_type: "stock_transfer", reference_id: id, ordering: "created_at", page_size: 50 });
   const [dialog, setDialog] = useState<null | "dispatch" | "receive" | "cancel">(null);
-  const [receivedDate, setReceivedDate] = useState(todayIn(session?.organization?.timezone));
   if (query.isLoading) return <LoadingBlock />;
   if (query.error || !query.data) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
   const t = query.data;
@@ -356,18 +312,20 @@ export function TransferDetail() {
       <ConfirmDialog open={dialog === "cancel"} onOpenChange={(o) => setDialog(o ? "cancel" : null)} title="Cancel draft transfer" tone="danger"
         confirmLabel="Cancel transfer" loading={action.isPending} description="The draft is marked cancelled. No stock has moved."
         onConfirm={() => action.mutateAsync({ action: "cancel", success: "Transfer cancelled" }).then(() => setDialog(null)).catch(() => undefined)} />
-      <Dialog open={dialog === "receive"} onOpenChange={(o) => setDialog(o ? "receive" : null)} title={`Receive ${t.number}`} size="sm"
-        description={`Books the goods into ${t.destination_name} at the cost they left ${t.source_name}.`}
-        footer={<>
-          <Button onClick={() => setDialog(null)}>Cancel</Button>
-          <Button variant="primary" loading={action.isPending} disabled={!receivedDate}
-            onClick={() => action.mutateAsync({ action: "receive", body: { date: receivedDate }, success: "Transfer received" })
-              .then(() => { setDialog(null); movements.refetch(); }).catch(() => undefined)}>Receive goods</Button>
-        </>}>
-        <Field label="Received on" required hint="Cannot be before the dispatch date.">
-          <DatePicker value={receivedDate} onChange={setReceivedDate} min={t.date} />
-        </Field>
-      </Dialog>
+      <FormDialog<{ date: string }> open={dialog === "receive"} onOpenChange={(o) => setDialog(o ? "receive" : null)} title={`Receive ${t.number}`} size="sm"
+        description={`Books the goods into ${t.destination_name} at the cost they left ${t.source_name}.`} submitLabel="Receive goods"
+        defaultValues={{ date: todayIn(session?.organization?.timezone) }}
+        onSubmit={async (values) => {
+          const { data } = await api.post(`/stock-transfers/${t.id}/receive/`, { date: values.date });
+          queryClient.setQueryData(["stock-transfers", "detail", String(t.id)], data);
+          ["stock-transfers", "stock-movements", "inventory/ledger", "inventory/balances", "products", "dashboard"]
+            .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+          toast.success("Transfer received");
+        }}>
+        <FormGrid columns={1}>
+          <FormField name="date" label="Received on" type="date" required min={t.date} hint="Cannot be before the dispatch date." />
+        </FormGrid>
+      </FormDialog>
     </>
   );
 }

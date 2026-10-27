@@ -154,6 +154,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "user": env("THROTTLE_USER", "10000/hour"),
         "auth": env("THROTTLE_AUTH", "20/minute"),
+        "refresh": env("THROTTLE_REFRESH", "300/minute"),
         "password_reset": env("THROTTLE_PASSWORD_RESET", "5/hour"),
     },
     "COERCE_DECIMAL_TO_STRING": True,
